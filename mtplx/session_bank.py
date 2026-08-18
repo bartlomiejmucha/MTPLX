@@ -1680,6 +1680,7 @@ class SessionBank:
         cache_factory: Callable[[], list[Any]] | None = None,
         mtp_cache_factory: Callable[[], list[Any]] | None = None,
         served_out: dict[str, Any] | None = None,
+        full_boundary: bool = False,
     ) -> tuple[list[Any], list[Any] | None, str] | None:
         """Restore a cached entry to an earlier safe prefix boundary.
 
@@ -1792,8 +1793,9 @@ class SessionBank:
             )
         # Boundary restores land the KV at the full boundary (no seed forward
         # will run — it would advance recurrent state past the captured
-        # boundary a second time). Non-boundary restores keep the seed-forward
-        # slot semantics.
+        # boundary a second time), and so do callers with complete
+        # attention-only state (full_boundary). Other restores keep the
+        # seed-forward slot semantics.
         if cache_snapshot_prefix_len == required_cache_prefix_len:
             # The cold decoder supplied precisely the state this consumer
             # needs.  Calling the legacy trim here would remove valid KV rows
@@ -1803,7 +1805,7 @@ class SessionBank:
         else:
             trim_to_target = (
                 (lambda c: _trim_cache_ref_to_tokens(c, restore_point))
-                if boundary_snapshot is not None
+                if boundary_snapshot is not None or full_boundary
                 else (lambda c: _trim_cache_ref_to_prefix(c, restore_point))
             )
         # Passive-probe maintenance splits: CPU-side perf_counter spans only,
