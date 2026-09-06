@@ -1682,6 +1682,11 @@ def test_serve_forwards_retrieval_flags_to_the_server_command(
     monkeypatch.setenv("MTPLX_CONFIG", str(tmp_path / "missing-config.toml"))
     model_dir = tmp_path / "example-model"
     model_dir.mkdir()
+    # Retrieval references are validated before launch now, so they have to
+    # resolve for the forwarding itself to be reachable.
+    monkeypatch.setattr(
+        "mtplx.hf_loader.resolve_model_path", lambda ref, cache_dir=None: model_dir
+    )
     payload = _serve_dry_run_payload_for_model(
         monkeypatch,
         capsys,
@@ -1731,6 +1736,9 @@ def test_serve_does_not_grant_remote_code_trust_by_default(
     monkeypatch.setenv("MTPLX_CONFIG", str(tmp_path / "missing-config.toml"))
     model_dir = tmp_path / "example-model"
     model_dir.mkdir()
+    monkeypatch.setattr(
+        "mtplx.hf_loader.resolve_model_path", lambda ref, cache_dir=None: model_dir
+    )
     payload = _serve_dry_run_payload_for_model(
         monkeypatch,
         capsys,
@@ -1738,6 +1746,50 @@ def test_serve_does_not_grant_remote_code_trust_by_default(
         extra_args=("--embedding-model", "org/embed"),
     )
     assert "--retrieval-trust-remote-code" not in payload["server_command"]
+
+
+def test_serve_refuses_to_start_when_a_retrieval_model_is_missing(
+    monkeypatch, tmp_path, capsys
+):
+    """Issue #445: a missing embedder used to boot fine and 500 on first use."""
+    monkeypatch.setenv("MTPLX_CONFIG", str(tmp_path / "missing-config.toml"))
+    model_dir = tmp_path / "example-model"
+    model_dir.mkdir()
+
+    def missing(ref, cache_dir=None):
+        raise FileNotFoundError(f"Model {ref} is not cached. Run: mtplx pull {ref}")
+
+    monkeypatch.setattr("mtplx.hf_loader.resolve_model_path", missing)
+    monkeypatch.setattr(public, "_serve_should_onboard", lambda _args: False)
+    monkeypatch.setattr(public, "_port_is_busy", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        public,
+        "_resolve_runtime_model_path",
+        lambda model, cache_dir=None: (str(model_dir), None),
+    )
+    monkeypatch.setattr(
+        public,
+        "_model_gate",
+        lambda runtime_model, *, unsafe_force_unverified, yes: (
+            {"compatibility": {"can_run": True, "exit_code": 0}},
+            None,
+        ),
+    )
+    args = build_parser().parse_args(
+        [
+            "serve",
+            "--model",
+            str(model_dir),
+            "--embedding-model",
+            "mlx-community/Qwen3-Embedding-4B-4bit-DWQ",
+            "--yes",
+        ]
+    )
+    args.dry_run = True
+    assert public.cmd_serve_public(args) == 1
+    output = capsys.readouterr().out
+    assert "mtplx pull mlx-community/Qwen3-Embedding-4B-4bit-DWQ" in output
+    assert "--embedding-model" in output
 
 
 def test_start_opencode_dry_run_uses_step_descriptor_defaults(

@@ -565,6 +565,33 @@ def _cached_model_ready_for_repo(path: Path, repo_id: str) -> bool:
     return True
 
 
+def huggingface_cache_path(repo_id: str) -> Path | None:
+    """Locate ``repo_id`` in the shared Hugging Face cache, or return ``None``.
+
+    ``snapshot_download(local_files_only=True)`` is the hub's own local
+    lookup, so it honours HF_HOME, HF_HUB_CACHE and HF_HUB_OFFLINE exactly the
+    way every other Hugging Face tool on the machine does, resolves the ref to
+    the right snapshot directory, and raises when the repo is not cached. It
+    never touches the network. A user who already downloaded a model with
+    `hf download`, mlx-lm, or transformers should not have to download the
+    same bytes a second time into MTPLX's private cache.
+    """
+
+    try:
+        from huggingface_hub import snapshot_download
+    except Exception:
+        # An install without huggingface_hub (or one too old for this call)
+        # keeps resolving exactly as it did before this step existed.
+        return None
+    try:
+        resolved = Path(snapshot_download(repo_id, local_files_only=True))
+    except Exception:
+        # Not cached, or the hub refused the lookup. Either way the caller
+        # falls through to the download hint.
+        return None
+    return resolved if resolved.is_dir() else None
+
+
 def resolve_model_path(model_ref: str, *, cache_dir: str | Path | None = None) -> Path:
     local = Path(model_ref).expanduser()
     if local.exists():
@@ -584,6 +611,13 @@ def resolve_model_path(model_ref: str, *, cache_dir: str | Path | None = None) -
         branded = cached.parent / repo_id.split("/", 1)[1]
         if branded != cached and _cached_model_ready_for_repo(branded, repo_id):
             return branded
+    # Last local step before the download hint: the machine-wide Hugging Face
+    # cache. MTPLX's own cache stays first so existing installs resolve where
+    # they always did, and the shared snapshot is held to the same contract
+    # gate, so a half-downloaded copy is skipped rather than served.
+    shared = huggingface_cache_path(repo_id)
+    if shared is not None and _cached_model_ready_for_repo(shared, repo_id):
+        return shared
     raise FileNotFoundError(
         f"Model {repo_id} is not cached. Run: mtplx pull {repo_id}"
     )

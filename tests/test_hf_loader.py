@@ -1336,3 +1336,100 @@ def test_pull_model_rejects_a_landed_file_whose_sha256_differs(tmp_path: Path, m
 
     assert not (cached / _SHARD).exists()
     assert not (cached / f"{_SHARD}.incomplete").exists()
+
+
+# ---- shared Hugging Face cache (issue #445) -------------------------------
+
+
+def _hf_cache_snapshot(root: Path, repo_id: str, sha: str = "0123456789abcdef") -> Path:
+    """Build the layout `huggingface_hub` writes for a downloaded repo."""
+    org, name = repo_id.split("/", 1)
+    repo_root = root / f"models--{org}--{name}"
+    snapshot = repo_root / "snapshots" / sha
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}\n", encoding="utf-8")
+    (snapshot / "model.safetensors").write_bytes(b"weights")
+    refs = repo_root / "refs"
+    refs.mkdir(parents=True, exist_ok=True)
+    (refs / "main").write_text(sha, encoding="utf-8")
+    return snapshot
+
+
+@pytest.fixture
+def hf_hub_cache(tmp_path: Path, monkeypatch) -> Path:
+    """Point huggingface_hub at an empty cache of our own."""
+    constants = pytest.importorskip("huggingface_hub.constants")
+    root = tmp_path / "hf-hub"
+    root.mkdir()
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(root))
+    return root
+
+
+def test_resolve_model_path_order_1_explicit_local_path_wins(
+    tmp_path: Path, hf_hub_cache: Path
+):
+    explicit = tmp_path / "on-disk"
+    explicit.mkdir()
+    (explicit / "config.json").write_text("{}\n", encoding="utf-8")
+    _hf_cache_snapshot(hf_hub_cache, "mtplx/example")
+
+    assert resolve_model_path(str(explicit), cache_dir=tmp_path) == explicit
+
+
+def test_resolve_model_path_order_2_private_cache_beats_the_hf_cache(
+    tmp_path: Path, hf_hub_cache: Path
+):
+    """Existing installs must keep resolving exactly where they always did."""
+    private = tmp_path / "mtplx--example"
+    private.mkdir()
+    (private / "config.json").write_text("{}\n", encoding="utf-8")
+    (private / "model.safetensors").write_bytes(b"1234")
+    _hf_cache_snapshot(hf_hub_cache, "mtplx/example")
+
+    assert resolve_model_path("mtplx/example", cache_dir=tmp_path) == private
+
+
+def test_resolve_model_path_order_3_falls_back_to_the_shared_hf_cache(
+    tmp_path: Path, hf_hub_cache: Path
+):
+    """A model another MLX tool already downloaded is not downloaded again."""
+    snapshot = _hf_cache_snapshot(hf_hub_cache, "mtplx/example")
+
+    resolved = resolve_model_path("mtplx/example", cache_dir=tmp_path)
+    assert resolved.resolve() == snapshot.resolve()
+
+
+def test_resolve_model_path_order_4_missing_everywhere_still_asks_for_a_pull(
+    tmp_path: Path, hf_hub_cache: Path
+):
+    with pytest.raises(FileNotFoundError, match="mtplx pull mtplx/example"):
+        resolve_model_path("mtplx/example", cache_dir=tmp_path)
+
+
+def test_resolve_model_path_ignores_an_incomplete_hf_snapshot(
+    tmp_path: Path, hf_hub_cache: Path
+):
+    """A half-downloaded shared snapshot must not be served as a real model."""
+    snapshot = _hf_cache_snapshot(hf_hub_cache, "mtplx/example")
+    (snapshot / "model.safetensors").unlink()
+
+    with pytest.raises(FileNotFoundError, match="mtplx pull mtplx/example"):
+        resolve_model_path("mtplx/example", cache_dir=tmp_path)
+
+
+def test_resolve_model_path_survives_a_hub_lookup_that_raises(
+    tmp_path: Path, monkeypatch
+):
+    """A broken or ancient huggingface_hub must not break local resolution."""
+    private = tmp_path / "mtplx--example"
+    private.mkdir()
+    (private / "config.json").write_text("{}\n", encoding="utf-8")
+    (private / "model.safetensors").write_bytes(b"1234")
+
+    import huggingface_hub
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("hub is unavailable")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", explode)
+    assert resolve_model_path("mtplx/example", cache_dir=tmp_path) == private

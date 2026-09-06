@@ -546,7 +546,12 @@ class RetrievalRegistry:
         entries: list[dict[str, Any]] = []
         now = time.time()
         with self._lock:
-            for (role, served_id), spec in sorted(self._specs.items()):
+            specs = sorted(self._specs.items())
+        # Resolution touches the filesystem, so it runs before the lock is
+        # taken for the snapshot itself.
+        resolved = {key: self._resolves(spec) for key, spec in specs}
+        with self._lock:
+            for (role, served_id), spec in specs:
                 # Look the backend up by its resolved key, the same one used
                 # for residency — the raw reference would miss a backend shared
                 # with another alias.
@@ -568,6 +573,10 @@ class RetrievalRegistry:
                             else None
                         ),
                         "resident": bool(key and key in self._resident),
+                        # Whether the checkpoint is actually on disk right
+                        # now. /v1/models lists only resolved models, so a
+                        # client never picks one the daemon cannot load.
+                        "resolved": resolved[(role, served_id)],
                         "max_tokens": spec.max_tokens,
                         "batch_size": spec.effective_batch_size(),
                         **stats.to_dict(),
@@ -649,19 +658,64 @@ class RetrievalRegistry:
 
         Keying by the raw reference would give a Hugging Face id and the local
         path it resolves to two separate backends, loading the same weights
-        twice and counting them twice against the cap — the opposite of the
+        twice and counting them twice against the cap - the opposite of the
         one-model-two-roles guarantee.
+
+        A cached key is trusted while its directory is still on disk, or while
+        its weights are already resident (resident weights *are* the model; a
+        directory moved underneath a loaded backend must not take it out of
+        service). Otherwise the reference is resolved again, and a reference
+        that no longer resolves raises :class:`RetrievalError` carrying the
+        loader's own pull hint - the endpoints turn that into a 404 with the
+        hint, where an escaping FileNotFoundError was a 500 traceback.
         """
-        cached = self._keys.get(spec.model_ref)
-        if cached is not None:
+        with self._lock:
+            cached = self._keys.get(spec.model_ref)
+            resident = cached is not None and bool(
+                getattr(self._backends.get(cached), "loaded", False)
+            )
+        if cached is not None and (resident or Path(cached).exists()):
             return cached
         from .hf_loader import resolve_model_path
 
-        path = resolve_model_path(spec.model_ref, cache_dir=self.cache_dir)
+        try:
+            path = resolve_model_path(spec.model_ref, cache_dir=self.cache_dir)
+        except Exception as exc:
+            with self._lock:
+                self._keys.pop(spec.model_ref, None)
+            raise RetrievalError(
+                f"{spec.role} model {spec.served_id!r} is not available: {exc}"
+            ) from exc
         key = str(Path(path).resolve())
         with self._lock:
             self._keys[spec.model_ref] = key
         return key
+
+    def unresolved(self) -> list[tuple[RetrievalSpec, str]]:
+        """Every registered model that is not on disk, with the reason why.
+
+        This is the same lookup a request performs, so an empty list is the
+        guarantee that no ``/v1/embeddings`` or ``/v1/rerank`` call can fail on
+        a missing checkpoint. Startup calls it so a mistyped or unpulled
+        ``--embedding-model`` refuses the launch instead of booting a daemon
+        that answers "MTPLX is ready" and then errors on the first request.
+        """
+        with self._lock:
+            specs = [spec for _key, spec in sorted(self._specs.items())]
+        failures: list[tuple[RetrievalSpec, str]] = []
+        for spec in specs:
+            try:
+                self._backend_key(spec)
+            except RetrievalError as exc:
+                failures.append((spec, str(exc)))
+        return failures
+
+    def _resolves(self, spec: RetrievalSpec) -> bool:
+        try:
+            self._backend_key(spec)
+        except RetrievalError:
+            return False
+        return True
 
     @contextmanager
     def _acquire(self, spec: RetrievalSpec):

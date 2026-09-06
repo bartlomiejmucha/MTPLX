@@ -2908,6 +2908,12 @@ class ServerState:
         from mtplx.retrieval import registry_from_args
 
         self.retrieval = registry_from_args(args)
+        # Same contract as the chat model: a reference that does not resolve
+        # refuses the launch. Before this, a mistyped or unpulled
+        # --embedding-model booted a daemon that printed "MTPLX is ready",
+        # listed the model on /v1/models, and then raised FileNotFoundError
+        # out of the loader on the first request (HTTP 500 with a traceback).
+        _refuse_unresolvable_retrieval_models(self.retrieval)
         self.started_at_s = time.time()
         self.lock = Lock()
         self.foreground_lock = Lock()
@@ -30142,6 +30148,11 @@ def create_app(state: ServerState) -> FastAPI:
             for descriptor in retrieval.descriptors():
                 if descriptor["role"] != wanted:
                     continue
+                # Never advertise a model the daemon cannot load. Startup
+                # refuses unresolvable references, so this covers the case
+                # startup cannot: a checkpoint deleted while the daemon runs.
+                if not descriptor.get("resolved", True):
+                    continue
                 entries.append(
                     {
                         "id": descriptor["id"],
@@ -36742,6 +36753,27 @@ def _start_aime_parent_watchdog_from_env() -> None:
     ).start()
 
 
+def _refuse_unresolvable_retrieval_models(registry: Any) -> None:
+    """Refuse to start when a configured retrieval model is not on disk.
+
+    Retrieval references stay symbolic until the server resolves them, so this
+    is the one place where --embedding-model / --reranker-model can be held to
+    the same "resolve it or do not start" contract the chat model already has.
+    The loader's own message is passed through verbatim: it carries the
+    `mtplx pull <repo>` hint the user needs.
+    """
+
+    failures = registry.unresolved() if registry is not None else []
+    if not failures:
+        return
+    flags = {"embedding": "--embedding-model", "rerank": "--reranker-model"}
+    lines = [
+        f"{flags.get(spec.role, spec.role)} {spec.model_ref}: {reason}"
+        for spec, reason in failures
+    ]
+    raise RetrievalError("\n".join(lines))
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     validate_server_security_args(args)
@@ -36749,7 +36781,7 @@ def main(argv: list[str] | None = None) -> None:
     _start_aime_parent_watchdog_from_env()
     try:
         state = ServerState(args)
-    except A3BMTPBatchInstallError as exc:
+    except (A3BMTPBatchInstallError, RetrievalError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2) from None
     app = create_app(state)
