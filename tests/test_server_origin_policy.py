@@ -99,10 +99,24 @@ def test_parse_cors_origins_normalizes_and_merges_env():
     )
 
 
-@pytest.mark.parametrize("bad", ["localhost:5173", "*", "http://", "http://a.example/path", "ftp://a.example"])
+@pytest.mark.parametrize("bad", ["localhost:5173", "*", "http://", "http://a.example/path", "tauri://", "app://x.example/y", "http://user:pw@a.example"])
 def test_parse_cors_origins_refuses_anything_that_is_not_an_origin(bad):
     with pytest.raises(ValueError):
         _parse_cors_origins([bad])
+
+
+def test_parse_cors_origins_accepts_app_scheme_origins():
+    """Desktop web views present custom-scheme origins (#473: Jan.app is tauri://localhost)."""
+    origins = _parse_cors_origins(
+        ["tauri://localhost", "TAURI://Localhost/", "app://obsidian.md", "capacitor://localhost"],
+        "tauri://localhost, http://localhost:1420",
+    )
+    assert origins == (
+        "tauri://localhost",
+        "app://obsidian.md",
+        "capacitor://localhost",
+        "http://localhost:1420",
+    )
 
 
 def test_cors_origin_flag_is_repeatable_and_refuses_bad_values(monkeypatch):
@@ -205,6 +219,32 @@ def test_allowlisted_origin_reaches_the_api_with_credentials_and_private_network
     assert client.get("/v1/models", headers={"Origin": "http://LOCALHOST:5173"}).status_code == 200
     # A second origin is still foreign.
     assert client.get("/v1/models", headers={"Origin": FOREIGN}).status_code == 403
+
+
+def test_allowlisted_app_scheme_origin_reaches_the_api():
+    """A tauri:// origin on the allowlist gets the same grant as an http one (#473)."""
+    client = _client(cors_origins=["tauri://localhost"])
+
+    preflight = client.options(
+        "/v1/chat/completions",
+        headers={
+            "Origin": "tauri://localhost",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization, content-type",
+        },
+    )
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == "tauri://localhost"
+    assert preflight.headers["access-control-allow-credentials"] == "true"
+
+    models = client.get("/v1/models", headers={"Origin": "tauri://localhost"})
+    assert models.status_code == 200
+    assert models.headers["access-control-allow-origin"] == "tauri://localhost"
+
+    # Without the allowlist entry the same origin is still foreign.
+    assert _client().get("/v1/models", headers={"Origin": "tauri://localhost"}).status_code == 403
+    # And the allowlist never opens admin.
+    assert client.get("/admin/sessions", headers={"Origin": "tauri://localhost"}).status_code == 403
 
 
 def test_allowlisted_origin_never_reaches_admin_or_browser_sign_in():

@@ -45,6 +45,13 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
+- **Desktop web views can be allowlisted for CORS** (issue #473). The
+  origin validator accepted only `http` and `https`, so
+  `--cors-origin tauri://localhost` (Jan.app) and `MTPLX_CORS_ORIGINS`
+  entries such as `app://obsidian.md` were refused as invalid and the
+  requests got a 403. Any scheme is an origin scheme now; a wildcard, a
+  bare host, a path, a query or credentials are still refused, and the
+  allowlist still never opens `/admin` or the browser sign-in routes.
 - **Request-capture registry no longer grows for the life of the daemon**
   (noticed in PR #356, PhilipJohnBasile). With `MTPLX_REQUEST_CAPTURE_DIR` set, the in-memory map from request id
   to capture file kept an entry for every request ever captured, including

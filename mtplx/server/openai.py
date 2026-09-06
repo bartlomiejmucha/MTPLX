@@ -4782,17 +4782,37 @@ def _path_is_same_origin_only(path: str) -> bool:
     return any(path == root or path.startswith(root + "/") for root in _SAME_ORIGIN_ONLY_ROOTS)
 
 
+_ORIGIN_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*$")
+
+
+def _origin_default_port(scheme: str) -> int:
+    """80 and 443 for the web schemes; 0 (no port) for app schemes such as tauri://."""
+
+    if scheme == "https":
+        return 443
+    if scheme == "http":
+        return 80
+    return 0
+
+
 def _normalize_origin(value: str) -> tuple[str, str, int]:
-    """Return (scheme, host, port) for an origin string, or raise ValueError."""
+    """Return (scheme, host, port) for an origin string, or raise ValueError.
+
+    Any RFC 3986 scheme is an origin scheme (RFC 6454): desktop web views
+    present ``tauri://localhost``, ``app://obsidian.md`` or
+    ``capacitor://localhost``, and an operator must be able to allowlist
+    them. A wildcard, a bare host, a path, a query, or credentials are
+    still refused.
+    """
 
     text = str(value or "").strip().rstrip("/")
     parts = urllib.parse.urlsplit(text)
     scheme = (parts.scheme or "").lower()
-    if scheme not in {"http", "https"} or not parts.hostname:
+    if not _ORIGIN_SCHEME_RE.match(scheme) or not parts.hostname:
         raise ValueError(f"not an origin (expected scheme://host[:port]): {value!r}")
     if parts.path or parts.query or parts.fragment or parts.username or parts.password:
         raise ValueError(f"an origin has no path, query, or credentials: {value!r}")
-    port = parts.port if parts.port is not None else (443 if scheme == "https" else 80)
+    port = parts.port if parts.port is not None else _origin_default_port(scheme)
     return scheme, parts.hostname.lower(), int(port)
 
 
@@ -4810,7 +4830,7 @@ def _parse_cors_origins(values: Iterable[str] | None, env_value: str | None = No
             if not piece:
                 continue
             scheme, host, port = _normalize_origin(piece)
-            default_port = 443 if scheme == "https" else 80
+            default_port = _origin_default_port(scheme)
             hostname = f"[{host}]" if ":" in host else host
             origin = f"{scheme}://{hostname}" + ("" if port == default_port else f":{port}")
             if origin not in normalized:
@@ -36195,7 +36215,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Let browser pages served from this origin (for example "
-            "http://localhost:5173) call the API with credentials. Repeatable; "
+            "http://localhost:5173, or tauri://localhost for a desktop web "
+            "view) call the API with credentials. Repeatable; "
             "MTPLX_CORS_ORIGINS takes a comma-separated list. Pages MTPLX serves "
             "itself are always allowed, every other origin is refused, and "
             "/admin routes stay same-origin only."
