@@ -15,14 +15,14 @@ Homebrew is the recommended macOS path. Python-only installs can use PyPI:
 python3 -m pip install -U mtplx
 ```
 
-For faster parallel model downloads, install aria2 and let `pull` select it automatically:
+The built-in downloader is the default. For faster parallel downloads, install aria2 and opt in:
 
 ```bash
 brew install aria2
-mtplx pull Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed
+mtplx pull --download-backend aria2 Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed
 ```
 
-Use `--download-backend aria2` to require aria2c, or `--download-backend python` to force the built-in downloader.
+`mtplx pull --download-backend aria2` requires aria2c and fails if it is missing; `--download-backend auto` uses aria2c when it is installed and the built-in downloader otherwise; `python` (the default) never touches aria2c.
 Hugging Face credentials are passed to aria2c through standard input and are never placed in the process arguments.
 
 The GitHub release wheel remains available for reproducible installs:

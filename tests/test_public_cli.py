@@ -8432,7 +8432,7 @@ def test_pull_progress_json_emits_ndjson_events(tmp_path, monkeypatch, capsys):
         assert cache_dir == str(tmp_path)
         assert revision is None
         assert progress_interval_s == 0.4
-        assert download_backend == "auto"
+        assert download_backend == "python"
         progress_callback(
             {
                 "event": "start",
