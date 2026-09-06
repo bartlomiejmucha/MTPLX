@@ -437,7 +437,10 @@ final class ToolResultIntegrityTests: XCTestCase {
             contentsOf: URL(fileURLWithPath: result.envPath),
             encoding: .utf8
         )
-        XCTAssertTrue(envText.contains("TERMINAL_CWD="), envText)
-        XCTAssertTrue(envText.contains(workspace.path), envText)
+        // Hermes v0.21 deprecates TERMINAL_CWD in .env (it warns on every
+        // launch while the line exists) and reads terminal.cwd from the
+        // config instead; the workspace still reaches .env as HERMES_WORKSPACE.
+        XCTAssertFalse(envText.contains("TERMINAL_CWD="), envText)
+        XCTAssertTrue(envText.contains("HERMES_WORKSPACE=\"\(workspace.path)\""), envText)
     }
 }
