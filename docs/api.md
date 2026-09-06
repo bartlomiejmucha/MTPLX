@@ -126,3 +126,14 @@ X-API-Key: <key>
 ```
 
 `--warmup-tokens` runs a small startup generation after model load and reports the result in `/health`. `--strict-warmup` makes warmup failure fatal.
+
+`--adaptive-policy expected_value` lets the engine stop a draft cycle early
+when another draft step is not expected to pay for its verify work;
+`--adaptive-policy none` (the default) drafts to `--depth` every cycle. The
+app's Pi and Hermes launches name the policy for the 27B family and leave it
+off for Flash-Next, where a fixed depth 3 measured 7 to 8 percent faster. The
+policy can be flipped live through `POST /v1/mtplx/settings` (the app's
+Adaptive depth switch), and the flip is part of the session bank's cache
+identity: every banked session misses once after it and the next turn
+re-prefills from scratch (42 s for a 19k-token prompt on the 27B), so change
+it between sessions rather than in the middle of a long one.
