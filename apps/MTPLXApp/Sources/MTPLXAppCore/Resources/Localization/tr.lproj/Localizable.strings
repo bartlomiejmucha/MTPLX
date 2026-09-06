@@ -1576,3 +1576,5 @@
 "Hermes runs in a Terminal window with file, web, browser, and messaging tools. Open it to start chatting." = "Hermes, dosya, web, tarayıcı ve mesajlaşma araçlarıyla bir Terminal penceresinde çalışır. Sohbete başlamak için pencereyi açın.";
 "Ready. Open the dashboard to use this model's backend defaults." = "Hazır. Bu modelin arka uç varsayılanlarını kullanmak için panoyu açın.";
 "Ready. Open the dashboard to save this setup." = "Hazır. Bu kurulumu kaydetmek için panoyu açın.";
+"Retry verify" = "Doğrulamayı yeniden dene";
+"Use it now" = "Şimdi kullan";

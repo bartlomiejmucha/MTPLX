@@ -1576,3 +1576,5 @@
 "Hermes runs in a Terminal window with file, web, browser, and messaging tools. Open it to start chatting." = "HermesはTerminalウインドウで実行され、ファイル、Web、ブラウザ、メッセージングのツールを備えています。開いてチャットを始めましょう。";
 "Ready. Open the dashboard to use this model's backend defaults." = "準備完了。ダッシュボードを開くと、このモデルのバックエンドのデフォルト設定を使用できます。";
 "Ready. Open the dashboard to save this setup." = "準備完了。ダッシュボードを開いて、この設定を保存してください。";
+"Retry verify" = "検証を再試行";
+"Use it now" = "今すぐ使用";

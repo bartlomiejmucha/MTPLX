@@ -1576,3 +1576,5 @@
 "Hermes runs in a Terminal window with file, web, browser, and messaging tools. Open it to start chatting." = "Hermes 在 Terminal 窗口中运行，带有文件、网页、浏览器和消息传递工具。打开它开始聊天。";
 "Ready. Open the dashboard to use this model's backend defaults." = "已就绪。打开仪表盘以使用此模型的后端默认设置。";
 "Ready. Open the dashboard to save this setup." = "已就绪。打开仪表盘以保存此设置。";
+"Retry verify" = "重试验证";
+"Use it now" = "立即使用";

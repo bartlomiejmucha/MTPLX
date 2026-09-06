@@ -161,7 +161,7 @@ struct VerifyStage: View {
     private var footerButton: some View {
         if failedSpeedOutcome != nil, !orchestrator.isBuilding {
             HStack(spacing: 10) {
-                ForgePrimaryButton("Retry verify", icon: "arrow.clockwise", isEnabled: true) {
+                ForgePrimaryButton(tr("Retry verify"), icon: "arrow.clockwise", isEnabled: true) {
                     orchestrator.startBuild()
                 }
                 Button {
@@ -183,7 +183,7 @@ struct VerifyStage: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(orchestrator.buildRunDir == nil)
-                ForgePrimaryButton("Discard", icon: "trash", isEnabled: true) {
+                ForgePrimaryButton(tr("Discard"), icon: "trash", isEnabled: true) {
                     orchestrator.resetWizard()
                 }
             }

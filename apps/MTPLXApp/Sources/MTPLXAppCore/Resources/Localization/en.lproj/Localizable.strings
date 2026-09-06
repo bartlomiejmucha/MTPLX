@@ -1576,3 +1576,5 @@
 "Hermes runs in a Terminal window with file, web, browser, and messaging tools. Open it to start chatting." = "Hermes runs in a Terminal window with file, web, browser, and messaging tools. Open it to start chatting.";
 "Ready. Open the dashboard to use this model's backend defaults." = "Ready. Open the dashboard to use this model's backend defaults.";
 "Ready. Open the dashboard to save this setup." = "Ready. Open the dashboard to save this setup.";
+"Retry verify" = "Retry verify";
+"Use it now" = "Use it now";

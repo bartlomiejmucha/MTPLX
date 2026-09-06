@@ -29,6 +29,9 @@ All notable user-facing changes to MTPLX. The format is based on
   client note, the Hermes auto-approve, install-status and Terminal notes,
   and the tune step's ready line) were English in every language; the ten
   strings now resolve through the app language in all thirteen tables.
+- **Forge buttons localized.** The Retry verify, Discard and Use it now
+  buttons in the Forge verify and registered stages were English in every
+  language; they now follow the app language.
 - **Turkish** (issue #470). The app ships a thirteenth language table
   (Türkçe, 1,562 strings) next to the twelve from 2.11.
 - **Remove a stale custom model from the picker** (PR #471, nRanzo). A

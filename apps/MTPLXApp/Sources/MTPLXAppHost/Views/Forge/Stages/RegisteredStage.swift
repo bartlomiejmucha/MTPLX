@@ -140,7 +140,7 @@ struct RegisteredStage: View {
     @ViewBuilder
     private var ctaRow: some View {
         HStack(spacing: 12) {
-            ForgePrimaryButton("Use it now", icon: "play.fill", isEnabled: !isLaunching && orchestrator.state.hasSpeedWinningVerification) {
+            ForgePrimaryButton(tr("Use it now"), icon: "play.fill", isEnabled: !isLaunching && orchestrator.state.hasSpeedWinningVerification) {
                 useItNow()
             }
             secondaryButton(tr("Publish to HF"), icon: "arrow.up.circle.fill") {

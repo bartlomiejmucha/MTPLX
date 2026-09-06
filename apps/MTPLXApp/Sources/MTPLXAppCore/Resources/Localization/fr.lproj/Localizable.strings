@@ -1576,3 +1576,5 @@
 "Hermes runs in a Terminal window with file, web, browser, and messaging tools. Open it to start chatting." = "Hermes s'exécute dans une fenêtre Terminal avec des outils de fichiers, Web, de navigateur et de messagerie. Ouvrez-la pour commencer à dialoguer.";
 "Ready. Open the dashboard to use this model's backend defaults." = "Prêt. Ouvrez le tableau de bord pour utiliser les réglages par défaut du backend de ce modèle.";
 "Ready. Open the dashboard to save this setup." = "Prêt. Ouvrez le tableau de bord pour enregistrer cette configuration.";
+"Retry verify" = "Réessayer la vérification";
+"Use it now" = "Utiliser maintenant";
