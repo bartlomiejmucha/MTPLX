@@ -1562,3 +1562,7 @@
 "Seconds a response may wait on a model that is making no progress before it is cancelled. 0 turns the watchdog off; long prompts and deep reasoning keep reporting progress and are never cut short by this." = "响应在等待无进展的模型多少秒后被取消。0 表示关闭看门狗；长提示和深度推理会持续报告进展，绝不会因此被中断。";
 "Adaptive depth" = "自适应深度";
 "Stops a draft early when the next token is unlikely to be accepted. Off drafts to the full depth every cycle." = "当下一个 token 不太可能被接受时提前停止草稿。关闭后每个周期都草拟到完整深度。";
+"Appearance" = "外观";
+"Jet black, warm cream, or follow macOS." = "纯黑、暖米色，或跟随 macOS。";
+"Dark" = "深色";
+"Light" = "浅色";

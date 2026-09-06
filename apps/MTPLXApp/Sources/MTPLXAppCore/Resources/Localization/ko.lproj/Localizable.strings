@@ -1562,3 +1562,7 @@
 "Seconds a response may wait on a model that is making no progress before it is cancelled. 0 turns the watchdog off; long prompts and deep reasoning keep reporting progress and are never cut short by this." = "진행이 없는 모델을 응답이 기다릴 수 있는 시간(초)입니다. 초과하면 취소됩니다. 0이면 감시를 끕니다. 긴 프롬프트와 깊은 추론은 계속 진행을 보고하므로 이 설정으로 중단되지 않습니다.";
 "Adaptive depth" = "적응형 깊이";
 "Stops a draft early when the next token is unlikely to be accepted. Off drafts to the full depth every cycle." = "다음 토큰이 채택될 가능성이 낮으면 드래프트를 일찍 멈춥니다. 끄면 매 사이클 전체 깊이까지 드래프트합니다.";
+"Appearance" = "모양";
+"Jet black, warm cream, or follow macOS." = "제트 블랙, 따뜻한 크림, 또는 macOS 설정 따르기.";
+"Dark" = "다크";
+"Light" = "라이트";

@@ -22,7 +22,9 @@ public enum AppAppearance: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Segmented-control label.
+    /// Segmented-control label. The English text is also the
+    /// localization key, so display sites wrap it in `tr(_:)`; keep
+    /// these in step with the shipped string tables.
     public var title: String {
         switch self {
         case .system: return "System"

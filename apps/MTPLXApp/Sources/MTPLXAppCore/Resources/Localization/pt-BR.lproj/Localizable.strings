@@ -1562,3 +1562,7 @@
 "Seconds a response may wait on a model that is making no progress before it is cancelled. 0 turns the watchdog off; long prompts and deep reasoning keep reporting progress and are never cut short by this." = "Segundos que uma resposta pode esperar por um modelo sem progresso antes de ser cancelada. 0 desliga o vigia; prompts longos e raciocínio profundo continuam registrando progresso e nunca são cortados por isso.";
 "Adaptive depth" = "Profundidade adaptativa";
 "Stops a draft early when the next token is unlikely to be accepted. Off drafts to the full depth every cycle." = "Interrompe um rascunho cedo quando é improvável que o próximo token seja aceito. Desligado: cada ciclo rascunha até a profundidade completa.";
+"Appearance" = "Aparência";
+"Jet black, warm cream, or follow macOS." = "Preto absoluto, creme quente ou seguir o macOS.";
+"Dark" = "Escuro";
+"Light" = "Claro";

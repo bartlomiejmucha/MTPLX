@@ -149,12 +149,12 @@ struct SettingsTab: View {
              subtitle: tr("App preferences saved on your Mac.")) {
             VStack(alignment: .leading, spacing: 8) {
                 FormRow(
-                    label: "Appearance",
-                    caption: "Jet black, warm cream, or follow macOS."
+                    label: tr("Appearance"),
+                    caption: tr("Jet black, warm cream, or follow macOS.")
                 ) {
-                    Picker("Appearance", selection: $themeStore.appearance) {
+                    Picker(tr("Appearance"), selection: $themeStore.appearance) {
                         ForEach(AppAppearance.allCases) { option in
-                            Text(option.title).tag(option)
+                            Text(tr(option.title)).tag(option)
                         }
                     }
                     .pickerStyle(.segmented)

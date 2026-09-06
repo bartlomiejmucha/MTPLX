@@ -1562,3 +1562,7 @@
 "Seconds a response may wait on a model that is making no progress before it is cancelled. 0 turns the watchdog off; long prompts and deep reasoning keep reporting progress and are never cut short by this." = "Bir yanıtın, ilerleme kaydetmeyen bir modeli iptal edilmeden önce kaç saniye bekleyebileceği. 0 gözcüyü kapatır; uzun istemler ve derin akıl yürütme ilerleme bildirmeyi sürdürür ve bu ayar tarafından asla yarıda kesilmez.";
 "Adaptive depth" = "Uyarlanır derinlik";
 "Stops a draft early when the next token is unlikely to be accepted. Off drafts to the full depth every cycle." = "Sonraki tokenın kabul edilme olasılığı düşükse taslağı erken durdurur. Kapalıyken her döngüde tam derinliğe kadar taslak üretir.";
+"Appearance" = "Görünüm";
+"Jet black, warm cream, or follow macOS." = "Jet siyahı, sıcak krem veya macOS ayarını izle.";
+"Dark" = "Koyu";
+"Light" = "Açık";
