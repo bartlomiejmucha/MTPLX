@@ -53,6 +53,30 @@ Codex 0.146 sends `web_search` in its default Responses request, so that default
 is intentionally rejected unless hosted tools are disabled or removed from the
 client request.
 
+Running Codex against MTPLX (measured with Codex 0.144.1 on 2026-09-06): Codex
+also sends a hosted `image_generation` tool by default, and with Codex apps
+installed its tools array carries the connector schemas (about 615 KB, which
+MTPLX counts as roughly 186k prompt tokens against the context window). Three
+settings make the first request work:
+
+```toml
+# ~/.codex/config.toml, or a dedicated CODEX_HOME so installed apps stay out
+model_provider = "mtplx"
+web_search = "disabled"
+
+[features]
+image_generation = false
+
+[model_providers.mtplx]
+name = "MTPLX"
+base_url = "http://127.0.0.1:8000/v1"
+wire_api = "responses"
+```
+
+`codex exec -m <served model id> ...` then completes shell and patch turns
+through `/v1/responses`; `--disable image_generation` on the command line is
+the same as the `[features]` entry.
+
 Codex `reasoning.effort: "xhigh"` is accepted as request vocabulary and resolved
 against the loaded model. Qwen 3.8 preserves `xhigh`, Step 3.5 clamps it to
 `high`, and Qwen 3.6 has no effective reasoning-effort tier. Request
