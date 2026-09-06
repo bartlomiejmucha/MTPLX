@@ -17,6 +17,10 @@ All notable user-facing changes to MTPLX. The format is based on
   pulls and fails with an install hint when aria2c is missing;
   `--download-backend auto` picks aria2c when it is installed. The built-in
   downloader stays the default.
+- **Remove a stale custom model from the picker** (PR #471, nRanzo). A
+  persisted custom model whose files are gone can be removed from the
+  picker with a right-click and a confirmation; official, installed and
+  currently selected models cannot. Nothing on disk is touched.
 - **README model table** (issues #238, #408). Every shipped pack with its
   Hugging Face repo, the smallest Mac it is offered on next to its measured
   peak serving memory, what it is for, and the profile and depth MTPLX
