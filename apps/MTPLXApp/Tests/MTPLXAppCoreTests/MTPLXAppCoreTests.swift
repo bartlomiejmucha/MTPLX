@@ -1716,6 +1716,38 @@ final class MTPLXAppCoreTests: XCTestCase {
         XCTAssertFalse(chat.arguments.contains("--adaptive-policy"))
     }
 
+    func testCommandBuilderLaunchesFlashNextAtTheChosenDepthUnlessTheSwitchIsOn() throws {
+        let fake = try makeExecutable(named: "mtplx")
+        let builder = MTPLXCommandBuilder(environment: [
+            "PATH": fake.deletingLastPathComponent().path,
+            "MTPLX_APP_TEST_PHYSICAL_MEMORY_BYTES": "137438953472",
+        ])
+        // Flash-Next resolves by name (qwen4_exp) without local metadata.
+        let flashNext = "/models/Qwen3.8-Flash-Next-MTPLX-Optimized-Speed"
+        var configuration = MTPLXAppConfiguration(
+            executablePath: fake.path, model: flashNext, profile: "sustained")
+        XCTAssertNil(configuration.adaptiveDepth)
+        // Unset: the Pi and Hermes presets' expected_value stays home on
+        // this family (measured 7 to 8 percent slower than fixed depth 3).
+        for target in [LaunchTarget.hermes, .pi, .chat] {
+            let command = try builder.buildServeCommand(
+                configuration: configuration, target: target, launchID: "unset-\(target)")
+            XCTAssertFalse(
+                command.arguments.contains("--adaptive-policy"),
+                "\(target) passed a depth policy for Flash-Next with the switch unset")
+        }
+        // On: the switch names the policy on every target, this family included.
+        configuration.adaptiveDepth = true
+        let on = try builder.buildServeCommand(
+            configuration: configuration, target: .hermes, launchID: "on-hermes")
+        XCTAssertTrue(on.arguments.containsInOrder(["--adaptive-policy", "expected_value"]))
+        // Off: still explicit, so a relaunch cannot inherit a policy.
+        configuration.adaptiveDepth = false
+        let off = try builder.buildServeCommand(
+            configuration: configuration, target: .pi, launchID: "off-pi")
+        XCTAssertTrue(off.arguments.containsInOrder(["--adaptive-policy", "none"]))
+    }
+
     func testAppConfigurationMigratesLegacyPinnedFansToMax() throws {
         let configuration = try JSONDecoder().decode(
             MTPLXAppConfiguration.self,

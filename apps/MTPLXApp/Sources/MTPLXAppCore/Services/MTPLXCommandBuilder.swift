@@ -991,14 +991,22 @@ struct ResolvedDaemonArgs {
         // The daemon starts with no depth policy unless told otherwise, so
         // "on" has to name the policy at launch to survive a relaunch. Unset
         // keeps the target's preset: Pi and Hermes name expected_value, the
-        // other targets pass nothing.
+        // other targets pass nothing. Flash-Next is the exception: measured
+        // 2026-09-06 on the shipped 2.11.2 lane, the expected-value policy
+        // decodes 7 to 8 percent slower than a fixed depth 3 at both 2k and
+        // 19k tokens of context (ABBA pairs, the stopped third draft buys
+        // nothing on that family), while the 27B pair is a tie. So an unset
+        // switch launches Flash-Next at the chosen depth for every target,
+        // and the switch still turns the policy on explicitly.
+        let familyKeepsPresetPolicy =
+            MTPLXModelOption.modelFamily(for: configuration.model) != "qwen4_exp"
         switch configuration.adaptiveDepth {
         case .some(false):
             adaptivePolicy = "none"
         case .some(true):
             adaptivePolicy = preset.adaptivePolicy ?? "expected_value"
         case .none:
-            adaptivePolicy = preset.adaptivePolicy
+            adaptivePolicy = familyKeepsPresetPolicy ? preset.adaptivePolicy : nil
         }
         adaptiveMinDepth = preset.adaptiveMinDepth
         adaptiveEVBaseDepth = preset.adaptiveEVBaseDepth
