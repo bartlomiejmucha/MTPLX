@@ -17,6 +17,9 @@ All notable user-facing changes to MTPLX. The format is based on
   pulls and fails with an install hint when aria2c is missing;
   `--download-backend auto` picks aria2c when it is installed. The built-in
   downloader stays the default.
+- **Appearance row localized.** The Settings row for Appearance (its title,
+  caption and the System, Dark and Light segments) was English in every
+  language; it now follows the app language in all thirteen tables.
 - **Turkish** (issue #470). The app ships a thirteenth language table
   (Türkçe, 1,562 strings) next to the twelve from 2.11.
 - **Remove a stale custom model from the picker** (PR #471, nRanzo). A
