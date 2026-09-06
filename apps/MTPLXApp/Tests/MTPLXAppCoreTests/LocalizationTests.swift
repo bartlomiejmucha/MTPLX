@@ -37,6 +37,7 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(AppLanguage.bestMatch(preferredLanguages: ["ja-JP"]), .japanese)
         XCTAssertEqual(AppLanguage.bestMatch(preferredLanguages: ["ru-RU"]), .russian)
         XCTAssertEqual(AppLanguage.bestMatch(preferredLanguages: ["de-AT"]), .german)
+        XCTAssertEqual(AppLanguage.bestMatch(preferredLanguages: ["tr-TR"]), .turkish)
     }
 
     func testBestMatchDoesNotCrossScripts() {
@@ -61,7 +62,7 @@ final class LocalizationTests: XCTestCase {
 
     func testEveryLanguageHasDistinctPresentation() {
         let all = AppLanguage.allCases
-        XCTAssertEqual(all.count, 12)
+        XCTAssertEqual(all.count, 13)
         XCTAssertEqual(Set(all.map(\.code)).count, all.count)
         XCTAssertEqual(Set(all.map(\.nativeName)).count, all.count)
         XCTAssertEqual(Set(all.map(\.englishName)).count, all.count)
@@ -89,6 +90,7 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(AppLanguage.matching("Bahasa"), [.indonesian])
         XCTAssertEqual(AppLanguage.matching("한국"), [.korean])
         XCTAssertEqual(AppLanguage.matching("Русский"), [.russian])
+        XCTAssertEqual(AppLanguage.matching("Türkçe"), [.turkish])
     }
 
     func testMatchingIsCaseAndDiacriticInsensitive() {
