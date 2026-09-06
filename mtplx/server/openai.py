@@ -766,15 +766,33 @@ _STATS_FOOTER_RE = re.compile(
 )
 
 
-def _fast_path_env_status() -> dict[str, dict[str, Any]]:
-    return {
-        key: {
+def _fast_path_env_status(
+    runtime_env_overrides: Mapping[str, str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Per-key fast-path env verdicts for ``/health``.
+
+    The expectation is the profile block, except where the server itself
+    resolved a runtime override for the served model (Flash-Next keeps the
+    verify snapshot and pins the batched target distributions, for
+    example): there the override is the truth the process runs with, so it
+    is the expectation and the entry names its source. Before this the app
+    daemon reported ``ok: false`` on three keys it set on purpose.
+    """
+    overrides = dict(runtime_env_overrides or {})
+    status: dict[str, dict[str, Any]] = {}
+    for key, profile_expected in FAST_PATH_ENV.items():
+        expected = overrides.get(key, profile_expected)
+        observed = os.environ.get(key)
+        entry: dict[str, Any] = {
             "expected": expected,
-            "observed": os.environ.get(key),
-            "ok": os.environ.get(key) == expected,
+            "observed": observed,
+            "ok": observed == expected,
         }
-        for key, expected in FAST_PATH_ENV.items()
-    }
+        if key in overrides:
+            entry["source"] = "runtime_override"
+            entry["profile_expected"] = profile_expected
+        status[key] = entry
+    return status
 
 
 def _server_runtime_env_overrides(
@@ -3059,7 +3077,9 @@ class ServerState:
                         "MTPLX profile env is incomplete: "
                         + json.dumps(bad_profile_env, sort_keys=True)
                     )
-            self.fast_path_env_status = _fast_path_env_status()
+            self.fast_path_env_status = _fast_path_env_status(
+                runtime_env_overrides=self.runtime_env_overrides
+            )
         _startup_line("[4/6] Checking local acceleration runtime")
         _startup_line("      This may take a few seconds.")
         self.mlx_runtime_status = _mlx_runtime_status()

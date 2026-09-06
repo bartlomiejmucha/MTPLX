@@ -12479,7 +12479,7 @@ def test_chat_stream_missing_required_tool_argument_still_emits_model_tool_call(
 def test_server_state_emits_startup_progress(monkeypatch, capsys):
     monkeypatch.setattr(openai, "apply_profile_env", lambda _profile, **_kwargs: None)
     monkeypatch.setattr(openai, "profile_env_status", lambda _profile, **_kwargs: {})
-    monkeypatch.setattr(openai, "_fast_path_env_status", lambda: {})
+    monkeypatch.setattr(openai, "_fast_path_env_status", lambda **kwargs: {})
     monkeypatch.setattr(openai, "_mlx_runtime_status", lambda: {"ok": True})
     monkeypatch.setattr(
         openai, "_configure_mlx_cache_limit", lambda _args: {"configured": False}
@@ -12530,7 +12530,7 @@ def test_server_state_applies_clear_cache_every_after_profile(monkeypatch):
 
     monkeypatch.setattr(openai, "apply_profile_env", capture_apply_profile_env)
     monkeypatch.setattr(openai, "profile_env_status", capture_profile_env_status)
-    monkeypatch.setattr(openai, "_fast_path_env_status", lambda: {})
+    monkeypatch.setattr(openai, "_fast_path_env_status", lambda **kwargs: {})
     monkeypatch.setattr(openai, "_mlx_runtime_status", lambda: {"ok": True})
     monkeypatch.setattr(
         openai,
@@ -12582,7 +12582,7 @@ def test_server_state_applies_clear_cache_every_after_profile(monkeypatch):
 def _monkeypatch_server_state_load(monkeypatch):
     monkeypatch.setattr(openai, "apply_profile_env", lambda _profile, **_kwargs: None)
     monkeypatch.setattr(openai, "profile_env_status", lambda _profile, **_kwargs: {})
-    monkeypatch.setattr(openai, "_fast_path_env_status", lambda: {})
+    monkeypatch.setattr(openai, "_fast_path_env_status", lambda **kwargs: {})
     monkeypatch.setattr(openai, "_mlx_runtime_status", lambda: {"ok": True})
     monkeypatch.setattr(
         openai, "_configure_mlx_cache_limit", lambda _args: {"configured": False}
@@ -12660,7 +12660,7 @@ def test_server_state_keeps_kv_quant_for_supported_family(monkeypatch):
 def test_server_state_reports_model_load_failure(monkeypatch, capsys):
     monkeypatch.setattr(openai, "apply_profile_env", lambda _profile, **_kwargs: None)
     monkeypatch.setattr(openai, "profile_env_status", lambda _profile, **_kwargs: {})
-    monkeypatch.setattr(openai, "_fast_path_env_status", lambda: {})
+    monkeypatch.setattr(openai, "_fast_path_env_status", lambda **kwargs: {})
     monkeypatch.setattr(openai, "_mlx_runtime_status", lambda: {"ok": True})
     monkeypatch.setattr(
         openai, "_configure_mlx_cache_limit", lambda _args: {"configured": False}
@@ -12687,7 +12687,7 @@ def test_server_state_passes_step_adapter_quant_contract_to_load(monkeypatch):
     captured = {}
     monkeypatch.setattr(openai, "apply_profile_env", lambda _profile, **_kwargs: None)
     monkeypatch.setattr(openai, "profile_env_status", lambda _profile, **_kwargs: {})
-    monkeypatch.setattr(openai, "_fast_path_env_status", lambda: {})
+    monkeypatch.setattr(openai, "_fast_path_env_status", lambda **kwargs: {})
     monkeypatch.setattr(openai, "_mlx_runtime_status", lambda: {"ok": True})
     monkeypatch.setattr(
         openai,
@@ -13982,7 +13982,7 @@ def _memory_plan_state_harness(monkeypatch):
     monkeypatch.delenv("MTPLX_WIRED_LIMIT_BYTES", raising=False)
     monkeypatch.setattr(openai, "apply_profile_env", lambda _profile, **_kwargs: None)
     monkeypatch.setattr(openai, "profile_env_status", lambda _profile, **_kwargs: {})
-    monkeypatch.setattr(openai, "_fast_path_env_status", lambda: {})
+    monkeypatch.setattr(openai, "_fast_path_env_status", lambda **kwargs: {})
     monkeypatch.setattr(openai, "_mlx_runtime_status", lambda: {"ok": True})
     monkeypatch.setattr(
         openai, "_configure_mlx_cache_limit", lambda _args: {"configured": False}
@@ -14112,3 +14112,31 @@ def test_warmup_rows_stay_out_of_dashboard_metrics_ring():
         state, {"request_id": "warm-2", "warmup": True, "completion_tokens": 8}
     )
     assert state.last_metrics[-1]["request_id"] == "real-1"
+
+
+def test_fast_path_env_status_treats_runtime_overrides_as_the_expectation(monkeypatch):
+    """Flash-Next pins MTPLX_SKIP_VERIFY_SNAPSHOT=0 and the batched target
+    distributions on purpose; /health must report those keys as ok against
+    the override the server resolved, not against the profile block."""
+    monkeypatch.setenv("MTPLX_SKIP_VERIFY_SNAPSHOT", "0")
+    monkeypatch.setenv("MTPLX_BATCH_TARGET_ARRAYS", "1")
+    monkeypatch.setenv("MTPLX_LAZY_TARGET_DISTRIBUTIONS", "0")
+
+    plain = openai._fast_path_env_status()
+    assert plain["MTPLX_SKIP_VERIFY_SNAPSHOT"]["ok"] is False
+    assert "source" not in plain["MTPLX_SKIP_VERIFY_SNAPSHOT"]
+
+    overrides = {
+        "MTPLX_SKIP_VERIFY_SNAPSHOT": "0",
+        "MTPLX_BATCH_TARGET_ARRAYS": "1",
+        "MTPLX_LAZY_TARGET_DISTRIBUTIONS": "0",
+    }
+    resolved = openai._fast_path_env_status(runtime_env_overrides=overrides)
+    for key, value in overrides.items():
+        assert resolved[key]["ok"] is True, key
+        assert resolved[key]["expected"] == value
+        assert resolved[key]["source"] == "runtime_override"
+        assert resolved[key]["profile_expected"] == openai.FAST_PATH_ENV[key]
+    # keys the server did not override keep the profile expectation
+    assert "source" not in resolved["MTPLX_LAZY_VERIFY_LOGITS"]
+    assert resolved["MTPLX_LAZY_VERIFY_LOGITS"]["expected"] == openai.FAST_PATH_ENV["MTPLX_LAZY_VERIFY_LOGITS"]

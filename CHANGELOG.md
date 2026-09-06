@@ -53,6 +53,12 @@ All notable user-facing changes to MTPLX. The format is based on
   `--model-id` still wins, and without a daemon the pack metadata for the id
   in hand answers as before. 2.11.2 already advertised image input from the
   pack metadata; the port-only form assumed the catalog default id.
+- **`/health` fast-path verdicts against the server's own overrides.** The
+  Flash-Next lane keeps the verify snapshot and pins the batched target
+  distributions on purpose, and `/health` reported those three keys as
+  `ok: false` against the profile block. The expectation is now the
+  runtime override the server resolved, with the entry naming its source
+  and the profile value it replaced.
 - **Hermes profile warning on every launch.** Hermes v0.21 deprecates the
   `TERMINAL_CWD` line in `.env`; the CLI profile writer and the app no
   longer write it. The working directory reaches Hermes through
