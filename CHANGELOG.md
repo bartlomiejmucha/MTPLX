@@ -4,6 +4,60 @@ All notable user-facing changes to MTPLX. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Responses API** (Philip John Basile). `POST /v1/responses` is served as
+  a stateless, text-only adapter over the chat runtime, covering
+  client-executed function, custom and namespace tools, with SDK-backed
+  tests.
+- **aria2 download backend as an opt-in** (PR #452, zeeshanhaque21).
+  `mtplx pull --download-backend aria2` uses aria2c for multi-connection
+  pulls and fails with an install hint when aria2c is missing;
+  `--download-backend auto` picks aria2c when it is installed. The built-in
+  downloader stays the default.
+- **README model table** (issues #238, #408). Every shipped pack with its
+  Hugging Face repo, the smallest Mac it is offered on next to its measured
+  peak serving memory, what it is for, and the profile and depth MTPLX
+  resolves on its own; two tests keep the table equal to the catalog.
+
+### Fixed
+
+- **Streams held for minutes when the first line looked like tool-control
+  markup** (issue #468). An answer whose first line was a bare name such as
+  `value` or `value=abc` stayed in the orphan-marker hold until the stream
+  finished. A bare tool-control line closes on its own line, so the hold is
+  released as soon as the first line closes.
+- **Retrieval models are validated at startup** (issue #445 audit). A
+  missing `--embedding-model` or `--reranker-model` used to boot a daemon
+  that answered the first `/v1/embeddings` request with a 500 and a
+  traceback; the CLI and the server module now refuse to launch with the
+  `mtplx pull` hint, a checkpoint that disappears later surfaces as a
+  structured 404, and `/v1/models` lists only retrieval models that
+  resolved. Retrieval models are also found in the shared Hugging Face
+  cache.
+- **Dashboard request log** (issue #401). The per-depth acceptance card
+  prints real accepted and drafted totals, and the when column shows the
+  completion time of every recorded request, cancelled and disconnected
+  rows included.
+- **Hermes profile warning on every launch.** Hermes v0.21 deprecates the
+  `TERMINAL_CWD` line in `.env`; the CLI profile writer and the app no
+  longer write it. The working directory reaches Hermes through
+  `terminal.cwd` in its config, as before.
+- **Flash-Next agent launches draft to the chosen depth.** With the
+  Adaptive depth switch unset, the app's Pi and Hermes launches no longer
+  turn on the expected-value depth policy for Flash-Next: measured on the
+  shipped 2.11.2 lane, the policy decodes 7 to 8 percent slower than a
+  fixed depth 3 at 2k and at 19k tokens of context, and the 27B pair is a
+  tie, so the 27B presets are unchanged. The switch still turns the policy
+  on explicitly.
+
+### Changed
+
+- **transformers floor raised to 5.10.0** (Dependabot alert 24); the lock
+  moves to 5.14.1.
+
 ## [2.11.2] - 2026-09-06
 
 A correctness release for every Mac that is not an M5, seven session-bank
