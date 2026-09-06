@@ -74,3 +74,22 @@ def test_unsafe_request_ids_are_sanitized(monkeypatch, tmp_path):
     files = [f for f in os.listdir(tmp_path) if f.endswith(".json")]
     assert len(files) == 1
     assert ".." not in files[0] and "/" not in files[0]
+
+
+def test_registry_forgets_pruned_requests(monkeypatch, tmp_path):
+    """The path registry must not grow past the ring: pruned ids are dropped."""
+    _enable(monkeypatch, tmp_path, keep="3")
+    for i in range(7):
+        request_capture.capture_request(f"chatcmpl-{i}", {"prompt_token_ids": [i]})
+    live = [f for f in os.listdir(tmp_path) if f.endswith(".json")]
+    assert len(live) == 3
+    assert len(request_capture._PATHS_BY_ID) == 3
+    assert set(request_capture._PATHS_BY_ID) == {"chatcmpl-4", "chatcmpl-5", "chatcmpl-6"}
+
+    # An outcome for a pruned id is a no-op and leaves the pruned envelope intact.
+    request_capture.capture_outcome("chatcmpl-0", {"finish_reason": "stop"})
+    pruned = sorted(os.listdir(tmp_path / "pruned"))
+    assert len(pruned) == 4
+    rec = json.load(open(tmp_path / "pruned" / pruned[0]))
+    assert rec["phase"] == "dispatched"
+    assert "chatcmpl-0" not in request_capture._PATHS_BY_ID

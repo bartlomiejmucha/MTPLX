@@ -45,6 +45,11 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
+- **Request-capture registry no longer grows for the life of the daemon.**
+  With `MTPLX_REQUEST_CAPTURE_DIR` set, the in-memory map from request id
+  to capture file kept an entry for every request ever captured, including
+  the ones the ring had already moved to `pruned/`; it now forgets an id
+  as soon as its file leaves the ring.
 - **Streams held for minutes when the first line looked like tool-control
   markup** (issue #468). An answer whose first line was a bare name such as
   `value` or `value=abc` stayed in the orphan-marker hold until the stream

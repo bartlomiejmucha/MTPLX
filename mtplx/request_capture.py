@@ -69,6 +69,17 @@ def _prune_locked(directory: str) -> None:
             )
         except OSError:
             pass
+    # A pruned file can no longer take an outcome (capture_outcome checks
+    # the path), so its registry entry is dead weight; without this the
+    # registry grew by one entry per captured request for the life of the
+    # daemon.
+    stale = [
+        request_id
+        for request_id, path in _PATHS_BY_ID.items()
+        if not os.path.exists(path)
+    ]
+    for request_id in stale:
+        _PATHS_BY_ID.pop(request_id, None)
 
 
 def capture_request(request_id: str | None, payload: dict[str, Any]) -> None:
