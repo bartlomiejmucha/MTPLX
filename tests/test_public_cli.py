@@ -9206,6 +9206,78 @@ def test_connect_opencode_actually_writes_the_config(tmp_path, monkeypatch, caps
     assert "unrelated" in written["provider"], "other providers must survive"
 
 
+def _connect_opencode_written(tmp_path, monkeypatch, argv, *, health, pack_vision):
+    import json
+
+    from mtplx.cli import _cmd_connect, build_parser
+    from mtplx.commands import public
+
+    config_path = tmp_path / "opencode.json"
+    config_path.write_text("{}")
+    monkeypatch.setenv("MTPLX_OPENCODE_CONFIG", str(config_path))
+    monkeypatch.setattr(public, "_http_json", lambda url, **kw: dict(health))
+    monkeypatch.setattr(public, "_model_vision_enabled", lambda ref: pack_vision)
+    args = build_parser().parse_args(["connect", "opencode", "--port", "18099", *argv])
+    assert _cmd_connect(args) == 0
+    return json.loads(config_path.read_text())
+
+
+def test_connect_opencode_follows_the_live_daemon_for_the_model_and_image_input(
+    tmp_path, monkeypatch
+):
+    """`mtplx connect opencode --port N` names no pack, so the daemon on N is
+    the source: its public model id and its vision flag (#472: the port-only
+    form advertised text-only and assumed the catalog default id)."""
+    written = _connect_opencode_written(
+        tmp_path,
+        monkeypatch,
+        [],
+        health={
+            "ok": True,
+            "model": "mtplx-flash-next-optimized-speed",
+            "vision": {"enabled": True, "formats": ["png"]},
+        },
+        pack_vision=False,
+    )
+    models = written["provider"]["mtplx"]["models"]
+    assert list(models) == ["mtplx-flash-next-optimized-speed"]
+    assert models["mtplx-flash-next-optimized-speed"]["modalities"]["input"] == [
+        "text",
+        "image",
+    ]
+    assert written["model"] == "mtplx/mtplx-flash-next-optimized-speed"
+
+
+def test_connect_opencode_explicit_model_id_wins_and_a_text_only_daemon_says_text(
+    tmp_path, monkeypatch
+):
+    written = _connect_opencode_written(
+        tmp_path,
+        monkeypatch,
+        ["--model-id", "qwen4-new-family-model"],
+        health={"ok": True, "model": "mtplx-other", "vision": {"enabled": False}},
+        pack_vision=True,
+    )
+    models = written["provider"]["mtplx"]["models"]
+    assert list(models) == ["qwen4-new-family-model"]
+    assert models["qwen4-new-family-model"]["modalities"]["input"] == ["text"]
+
+
+def test_connect_opencode_without_a_daemon_keeps_the_pack_answer(tmp_path, monkeypatch):
+    written = _connect_opencode_written(
+        tmp_path,
+        monkeypatch,
+        ["--model-id", "mtplx-qwen38-27b-optimized-speed"],
+        health={"ok": False, "error": "connection refused"},
+        pack_vision=True,
+    )
+    models = written["provider"]["mtplx"]["models"]
+    assert models["mtplx-qwen38-27b-optimized-speed"]["modalities"]["input"] == [
+        "text",
+        "image",
+    ]
+
+
 def test_connect_opencode_refuses_an_unreadable_config_without_touching_it(
     tmp_path, monkeypatch, capsys
 ):

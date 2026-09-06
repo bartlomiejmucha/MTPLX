@@ -47,6 +47,12 @@ All notable user-facing changes to MTPLX. The format is based on
   prints real accepted and drafted totals, and the when column shows the
   completion time of every recorded request, cancelled and disconnected
   rows included.
+- **`mtplx connect opencode` follows the live daemon** (issue #472). The
+  command names a host and a port, not a pack, so it now takes the model id
+  and the image-input flag from the daemon that answers there; an explicit
+  `--model-id` still wins, and without a daemon the pack metadata for the id
+  in hand answers as before. 2.11.2 already advertised image input from the
+  pack metadata; the port-only form assumed the catalog default id.
 - **Hermes profile warning on every launch.** Hermes v0.21 deprecates the
   `TERMINAL_CWD` line in `.env`; the CLI profile writer and the app no
   longer write it. The working directory reaches Hermes through

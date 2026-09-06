@@ -12351,6 +12351,37 @@ def _client_config_refusal(client: str, exc: Exception) -> str:
     return f"{client} config left unchanged: {detail}. Fix or move that file, then try again."
 
 
+def _live_server_capabilities(
+    host: str,
+    port: int,
+    *,
+    api_key: str | None,
+    timeout: float = 1.5,
+) -> dict[str, Any]:
+    """What the daemon at ``host:port`` serves right now, from ``/health``.
+
+    ``mtplx connect`` names a host and a port, never a pack, so the pack
+    probe the quickstart lane uses has nothing to look at there. The daemon
+    reports its public model id and the same vision block the app reads;
+    when it answers, that is the source. Unreachable (or keyed off) answers
+    ``{}`` and callers keep the pack-metadata fallback (#472).
+    """
+    base = f"http://{_connect_host_for_bind(str(host))}:{int(port)}"
+    health = _http_json(base + "/health", timeout=timeout, api_key=api_key)
+    if not isinstance(health, dict) or not health.get("ok"):
+        return {}
+    live: dict[str, Any] = {}
+    live_model = (
+        health.get("model") or health.get("model_id") or health.get("served_model_id")
+    )
+    if live_model:
+        live["model_id"] = str(live_model).split("/", 1)[-1]
+    vision = health.get("vision")
+    if isinstance(vision, dict) and vision.get("enabled") is not None:
+        live["vision"] = bool(vision.get("enabled"))
+    return live
+
+
 def _model_vision_enabled(model_ref: str) -> bool:
     """True when the resolved model dir carries a servable vision tower.
 
@@ -14786,6 +14817,22 @@ def cmd_integrate_public(args: Any) -> int:
             write_opencode_config,
         )
 
+        # The daemon that answers on this port names the model id and the
+        # image-input flag; an explicit --model-id stays authoritative, and
+        # with no daemon the pack metadata for the id in hand answers, as
+        # before (#472: the port-only form advertised text-only before
+        # 2.11.2 and assumed the catalog default id after it).
+        live = _live_server_capabilities(
+            str(args.host), int(args.port), api_key=getattr(args, "api_key", None)
+        )
+        cli_flags = getattr(args, "_cli_flags", set()) or set()
+        if live.get("model_id") and "model-id" not in cli_flags:
+            model_id = str(live["model_id"])
+        vision = (
+            bool(live["vision"])
+            if "vision" in live
+            else _model_vision_enabled(str(getattr(args, "model", "") or model_id))
+        )
         api_key_suffix = _api_key_command_suffix(args)
         reasoning_policy = reasoning_policy_for_model(model_ref=model_id)
         payload = {
@@ -14794,6 +14841,7 @@ def cmd_integrate_public(args: Any) -> int:
             "base_url": api_base_url,
             "api_base_url": api_base_url,
             "model_id": model_id,
+            "live_server": live or None,
             "config_path": str(opencode_config_path()),
             "server_command": (
                 f"mtplx quickstart --profile {_resolved_default_profile_name(args)} --host {args.host} --port {args.port} "
@@ -14809,7 +14857,7 @@ def cmd_integrate_public(args: Any) -> int:
                     else "mtplx-local"
                 ),
                 enable_thinking=reasoning_policy.supported,
-                vision=_model_vision_enabled(str(getattr(args, "model", "") or model_id)),
+                vision=vision,
                 reasoning_effort=reasoning_policy.default_effort,
                 reasoning_effort_levels=(
                     tuple(reasoning_policy.effort_levels)
@@ -14836,7 +14884,7 @@ def cmd_integrate_public(args: Any) -> int:
                 model_name=f"MTPLX {model_id}",
                 api_key=getattr(args, "api_key", None),
                 enable_thinking=reasoning_policy.supported,
-                vision=_model_vision_enabled(str(getattr(args, "model", "") or model_id)),
+                vision=vision,
                 reasoning_effort=reasoning_policy.default_effort,
                 reasoning_effort_levels=(
                     tuple(reasoning_policy.effort_levels)
