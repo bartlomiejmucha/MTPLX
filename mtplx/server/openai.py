@@ -14545,6 +14545,12 @@ def _record_request_metrics(state: "ServerState", record: dict[str, Any]) -> Non
         )
     except Exception:
         pass
+    # Wall clock for the row. Every completion path (normal, cancelled,
+    # disconnected, the OpenCode title fast path) funnels through this sink,
+    # so stamping it here is what lets the dashboard's request log say when a
+    # request finished instead of rendering a dash. setdefault so a producer
+    # that already knows a more precise instant keeps it.
+    record.setdefault("completed_at_s", time.time())
     safe = _json_safe(record)
     # Warmup generations (startup pass and the idle background ladder) are
     # not user requests: keep them out of the RAM ring that feeds the
@@ -15572,6 +15578,13 @@ def _metrics_envelope(
         "producer_gaps_over_200ms": producer_gaps_over_200ms,
         "mtp_depth": int(mtp_depth),
         "verify_calls": int(stats.get("verify_calls") or 0),
+        # Aggregate draft counters. They are part of the public stats block
+        # already, but the dashboard envelope only carried the per-depth
+        # breakdown, so the dashboard's "N accepted of M drafted" line read
+        # two keys that were never in the payload and rendered as dashes.
+        "accepted_drafts": int(stats.get("accepted_drafts") or 0),
+        "rejected_drafts": int(stats.get("rejected_drafts") or 0),
+        "drafted_tokens": int(stats.get("drafted_tokens") or 0),
         "accepted_by_depth": stats.get("accepted_by_depth") or [],
         "drafted_by_depth": stats.get("drafted_by_depth") or [],
         "mean_accept_probability_by_depth": (
@@ -22431,6 +22444,9 @@ def _finalize_batched_ar_generation(
     envelope["mtp_depth"] = 0
     envelope["verify_calls"] = 0
     envelope["verify_time_s"] = 0.0
+    envelope["accepted_drafts"] = 0
+    envelope["rejected_drafts"] = 0
+    envelope["drafted_tokens"] = 0
     envelope["accepted_by_depth"] = []
     envelope["draft_time_s"] = 0.0
     for key in (
@@ -24601,6 +24617,9 @@ def _run_generation(
                 "verify_eval_unattributed_time_s",
             ):
                 envelope[key] = 0 if key.endswith(("rows", "windows", "calls")) else 0.0
+            envelope["accepted_drafts"] = 0
+            envelope["rejected_drafts"] = 0
+            envelope["drafted_tokens"] = 0
             envelope["accepted_by_depth"] = []
             envelope["draft_time_s"] = 0.0
         if request_observability:
