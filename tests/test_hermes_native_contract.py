@@ -22,3 +22,26 @@ def test_hermes_trace_rejects_ambiguous_or_unrelated_receipts():
     assert _match_receipt(message, [wrong, receipt], set()) is receipt
     assert _match_receipt(message, [receipt, dict(receipt)], set()) is None
     assert _match_receipt(message, [{**receipt, "logged_at_s": 80}], set()) is None
+
+
+def test_hermes_dotenv_leaves_the_working_directory_to_config_yaml():
+    """Hermes v0.21 deprecates TERMINAL_CWD in .env (a warning on every launch);
+    terminal.cwd in config.yaml is the canonical setting and both writers emit it."""
+    from mtplx.commands import public
+
+    env_text = public._hermes_dotenv(
+        model_id="mtplx-flash-next-optimized-speed",
+        base_url="http://127.0.0.1:8000/v1",
+        api_key="mtplx-local",
+        workspace_path="/tmp/work space",
+    )
+    assert "TERMINAL_CWD" not in env_text
+    assert 'HERMES_WORKSPACE="/tmp/work space"' in env_text
+    config_text = public._hermes_config_yaml(
+        model_id="mtplx-flash-next-optimized-speed",
+        base_url="http://127.0.0.1:8000/v1",
+        api_key="mtplx-local",
+        workspace_path="/tmp/work space",
+    )
+    terminal = config_text.split("terminal:\n", 1)[1].split("\ncompression:", 1)[0]
+    assert "cwd: '/tmp/work space'" in terminal

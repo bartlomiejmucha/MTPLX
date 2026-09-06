@@ -11729,7 +11729,11 @@ def _hermes_dotenv(
         f"HERMES_MTPLX_GATEWAY_STATUS_COMMAND={_hermes_dotenv_quote(HERMES_GATEWAY_STATUS_COMMAND)}\n"
         f"HERMES_MTPLX_GATEWAY_TRUTH_NOTE={_hermes_dotenv_quote(HERMES_GATEWAY_TRUTH_HINT)}\n"
         f"HERMES_WORKSPACE={_hermes_dotenv_quote(workspace_path)}\n"
-        f"TERMINAL_CWD={_hermes_dotenv_quote(workspace_path)}\n"
+        # The working directory lives in config.yaml as terminal.cwd (written
+        # above); Hermes v0.21 deprecates TERMINAL_CWD in .env and prints a
+        # migration warning on every launch while the line exists. Hermes
+        # bridges terminal.cwd into the TERMINAL_CWD process variable itself.
+        # SYNC PAIR: HermesIntegration.dotenv.
     )
 
 
