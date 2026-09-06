@@ -534,106 +534,6 @@ def _build_kernel_m4_bn6(group_size: int, dtype: mx.Dtype):
     return kernel
 
 
-def _build_kernel_m8_ksplit_np(group_size: int, dtype: mx.Dtype, *, k_parts: int = 4):
-    """8-row variant of the m4 K-split kernel. BN=4, so BN*M=32 partials map
-    onto one simdgroup lane each for the final writeback.
-
-    CLOSED BRANCH (2026-06-12): microbenched 0.51-0.87x vs stock on all live
-    shapes (register pressure from 8 Vec8 row loads + 32 accumulators kills
-    occupancy). Not routed by the dispatcher; kept for evidence. Use the m16
-    NAX tile for M in 5..16 instead."""
-    key = ("m8_ksplit_np", group_size, dtype, int(k_parts))
-    if key in _VERIFY_KERNEL_CACHE:
-        return _VERIFY_KERNEL_CACHE[key]
-
-    source = f"""
-        using namespace metal;
-        constexpr int M = 8;
-        constexpr int BN = 4;
-        constexpr int K_PARTS = {int(k_parts)};
-        constexpr int GS = {group_size};
-
-        uint part = simdgroup_index_in_threadgroup;
-        uint lane = thread_index_in_simdgroup;
-        uint tg_n = threadgroup_position_in_grid.y;
-
-        int K = int(K_size);
-        int N = int(N_size);
-        int K_by_8 = K / 8;
-        int K_by_gs = K / GS;
-        int n0 = int(tg_n) * BN;
-        int packs_per_part = K_by_8 / K_PARTS;
-        int pack_start = int(part) * packs_per_part;
-        int pack_end = (int(part) == K_PARTS - 1) ? K_by_8 : pack_start + packs_per_part;
-
-        float acc[BN * M];
-        for (int i = 0; i < BN * M; ++i) {{
-            acc[i] = 0.0f;
-        }}
-
-        using Vec8 = vec<T, 8>;
-        const device Vec8 *xv = (const device Vec8*)x;
-
-        for (int pack = pack_start + int(lane); pack < pack_end; pack += 32) {{
-            int k_base = pack * 8;
-            Vec8 v[M];
-            _Pragma("unroll")
-            for (int r = 0; r < M; ++r) {{
-                v[r] = xv[(r * K + k_base) / 8];
-            }}
-            _Pragma("unroll")
-            for (int j = 0; j < BN; ++j) {{
-                uint32_t packed = w_q[(n0 + j) * K_by_8 + pack];
-                float s = float(scales[(n0 + j) * K_by_gs + (k_base / GS)]);
-                float b = float(biases[(n0 + j) * K_by_gs + (k_base / GS)]);
-                _Pragma("unroll")
-                for (int ki = 0; ki < 8; ++ki) {{
-                    float wv = float((packed >> (ki * 4)) & 0xFu) * s + b;
-                    _Pragma("unroll")
-                    for (int r = 0; r < M; ++r) {{
-                        acc[j * M + r] += float(v[r][ki]) * wv;
-                    }}
-                }}
-            }}
-        }}
-
-        for (int i = 0; i < BN * M; ++i) {{
-            acc[i] = simd_sum(acc[i]);
-        }}
-
-        threadgroup float partial[K_PARTS * BN * M];
-        if (lane == 0) {{
-            for (int i = 0; i < BN * M; ++i) {{
-                partial[int(part) * BN * M + i] = acc[i];
-            }}
-        }}
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        if (part == 0 && lane < BN * M) {{
-            float total = 0.0f;
-            for (int p = 0; p < K_PARTS; ++p) {{
-                total += partial[p * BN * M + int(lane)];
-            }}
-            int j = int(lane) / M;
-            int row = int(lane) - j * M;
-            int n_global = n0 + j;
-            if (n_global < N) {{
-                y[row * N + n_global] = T(total);
-            }}
-        }}
-    """
-
-    dtype_tag = {mx.bfloat16: "bf16", mx.float16: "fp16"}.get(dtype, "unk")
-    kernel = mx.fast.metal_kernel(
-        name=f"mtplx_verify_m8_ksplit_kp{int(k_parts)}_gs{group_size}_{dtype_tag}",
-        input_names=["x", "w_q", "scales", "biases", "K_size", "N_size"],
-        output_names=["y"],
-        source=source,
-    )
-    _VERIFY_KERNEL_CACHE[key] = kernel
-    return kernel
-
-
 def _build_kernel_m6_ksplit_np(group_size: int, dtype: mx.Dtype, *, k_parts: int = 2):
     """6-row K-split variant (24 accumulators/thread, scalar row registers).
 
@@ -784,47 +684,12 @@ def nax_qmm_m6(
     return y
 
 
-def m8_ksplit_eligible(M: int, K: int, N: int, bits: int, group_size: int, dtype) -> bool:
-    return (
-        int(bits) == 4
-        and int(group_size) in (32, 64, 128)
-        and dtype in (mx.bfloat16, mx.float16)
-        and 5 <= int(M) <= 8
-        and int(K) % 32 == 0
-        and int(N) % 4 == 0
-    )
-
-
-def nax_qmm_m8(
-    x2: mx.array,
-    w_q: mx.array,
-    scales: mx.array,
-    biases: mx.array,
-    *,
-    group_size: int = 64,
-) -> mx.array:
-    """Run the 8-row K-split verify matmul. Pads M in 5..8 to 8 rows."""
-    M = int(x2.shape[0])
-    K = int(x2.shape[1])
-    N = int(w_q.shape[0])
-    if M < 8:
-        pad = mx.zeros((8 - M, K), dtype=x2.dtype)
-        x8 = mx.contiguous(mx.concatenate([x2, pad], axis=0))
-    else:
-        x8 = mx.contiguous(x2)
-    k_parts = 2 if N >= 4096 else 4
-    kernel = _build_kernel_m8_ksplit_np(group_size, x2.dtype, k_parts=k_parts)
-    (y,) = kernel(
-        inputs=[x8, w_q, scales, biases, K, N],
-        template=[("T", x2.dtype)],
-        grid=(32 * k_parts, N // 4, 1),
-        threadgroup=(32 * k_parts, 1, 1),
-        output_shapes=[(8, N)],
-        output_dtypes=[x2.dtype],
-    )
-    if M < 8:
-        return y[:M, :]
-    return y
+# CLOSED BRANCH (2026-06-12, removed 2026-09-06 for issue #322): an 8-row
+# K-split verify matmul (BN=4, 32 partials) was built and microbenched at
+# 0.51-0.87x of stock on every live shape - eight Vec8 row loads plus 32
+# accumulators cost more occupancy than the wider rows buy. The dispatcher
+# never routed it. M in 5..16 goes to the m16 NAX tile below; do not
+# rebuild the m8 lane without a receipt that beats both.
 
 
 def m16_nax_eligible(M: int, K: int, N: int, bits: int, group_size: int, dtype) -> bool:

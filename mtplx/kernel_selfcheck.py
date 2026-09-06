@@ -638,8 +638,6 @@ def run_kernel_selfcheck(dtype, bits: int, group_size: int) -> dict[str, Any]:
         for lane in ("qmm_m4", "qmm_m4_wide", "qmm_m6", "qmm_m6_wide", "qmm_m16_nax"):
             lanes[lane] = _STATUS_SKIPPED
 
-    # Closed branch (2026-06-12): m8 ksplit is not routed by the dispatcher.
-    lanes["qmm_m8_ksplit"] = _STATUS_SKIPPED
     # lm_head_topk kernels exist but are not routed on the serve path.
     lanes["lm_head_topk"] = _STATUS_SKIPPED
 
