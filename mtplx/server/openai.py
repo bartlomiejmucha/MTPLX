@@ -6708,7 +6708,17 @@ def _initial_orphan_tool_control_state(text: str) -> str:
         if any(marker.startswith(lowered) for marker in partial_markers):
             return "hold"
         return "normal"
-    first_line = lowered.splitlines()[0]
+    first_raw = lowered.splitlines(keepends=True)[0]
+    first_line = first_raw.splitlines()[0]
+    if len(first_raw) > len(first_line):
+        # Issue #468: a bare tool-control line carries its ">" on the same
+        # line (the orphan forms matched above never span a line break), so
+        # once the first line is closed nothing that follows can turn it into
+        # a marker. Without this exit a first line that equals, prefixes or
+        # opens a bare name ("value", "valu", "value=abc") stayed in hold and
+        # the whole answer was buffered until finish(): minutes of silence on
+        # a long stream, long enough to trip client stream watchdogs.
+        return "normal"
     for name in (name.lower() for name in _ORPHAN_TOOL_CONTROL_BARE_NAMES):
         if name.startswith(first_line):
             return "hold"
