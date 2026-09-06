@@ -247,6 +247,7 @@ final class LocalizationTableTests: XCTestCase {
             .english: "Cancel", .simplifiedChinese: "取消", .spanish: "Cancelar", .hindi: "रद्द करें",
             .arabic: "إلغاء", .brazilianPortuguese: "Cancelar", .french: "Annuler", .russian: "Отмена",
             .japanese: "キャンセル", .german: "Abbrechen", .korean: "취소", .indonesian: "Batal",
+            .turkish: "İptal",
         ]
         for (language, word) in expected {
             XCTAssertEqual(try Self.table(language)["Cancel"], word, language.code)

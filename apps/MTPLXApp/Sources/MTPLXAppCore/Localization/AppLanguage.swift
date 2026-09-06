@@ -24,6 +24,7 @@ public enum AppLanguage: String, CaseIterable, Codable, Hashable, Identifiable, 
     case german = "de"
     case korean = "ko"
     case indonesian = "id"
+    case turkish = "tr"
 
     public static let base: AppLanguage = .english
 
@@ -47,6 +48,7 @@ public enum AppLanguage: String, CaseIterable, Codable, Hashable, Identifiable, 
         case .german: return "Deutsch"
         case .korean: return "한국어"
         case .indonesian: return "Bahasa Indonesia"
+        case .turkish: return "Türkçe"
         }
     }
 
@@ -66,6 +68,7 @@ public enum AppLanguage: String, CaseIterable, Codable, Hashable, Identifiable, 
         case .german: return "German"
         case .korean: return "Korean"
         case .indonesian: return "Indonesian"
+        case .turkish: return "Turkish"
         }
     }
 
@@ -84,6 +87,7 @@ public enum AppLanguage: String, CaseIterable, Codable, Hashable, Identifiable, 
         case .german: return "🇩🇪"
         case .korean: return "🇰🇷"
         case .indonesian: return "🇮🇩"
+        case .turkish: return "🇹🇷"
         }
     }
 

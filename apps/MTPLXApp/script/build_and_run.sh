@@ -301,7 +301,7 @@ fi
 # AppLanguage.allCases (a unit test keeps them in sync); a missing or
 # unparsable table fails the build so a broken language never ships.
 LOCALIZATION_SOURCE="$ROOT/Sources/MTPLXAppCore/Resources/Localization"
-LOCALIZATION_CODES=(en zh-Hans es hi ar pt-BR fr ru ja de ko id)
+LOCALIZATION_CODES=(en zh-Hans es hi ar pt-BR fr ru ja de ko id tr)
 for code in "${LOCALIZATION_CODES[@]}"; do
   table="$LOCALIZATION_SOURCE/$code.lproj/Localizable.strings"
   if [[ ! -f "$table" ]]; then
