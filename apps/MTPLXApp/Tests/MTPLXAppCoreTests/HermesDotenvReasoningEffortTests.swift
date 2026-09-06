@@ -48,7 +48,8 @@ final class HermesDotenvReasoningEffortTests: XCTestCase {
                 "key is not a dotenv identifier, so a value ran into it: \(line)"
             )
         }
-        XCTAssertTrue(lines.contains("TERMINAL_CWD=\"\(workspace.path)\""), envText)
+        XCTAssertTrue(lines.contains("HERMES_WORKSPACE=\"\(workspace.path)\""), envText)
+        XCTAssertFalse(lines.contains { $0.hasPrefix("TERMINAL_CWD=") }, "TERMINAL_CWD is deprecated in .env by Hermes v0.21; terminal.cwd in config.yaml carries the workspace: \(envText)")
         XCTAssertTrue(lines.contains("HERMES_MTPLX_REASONING_EFFORT=\"xhigh\""), envText)
     }
 }

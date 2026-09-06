@@ -3167,7 +3167,7 @@ final class MTPLXAppCoreTests: XCTestCase {
         XCTAssertTrue(envText.contains("Never print token"))
         XCTAssertTrue(envText.contains("OPENAI_BASE_URL=\"http://127.0.0.1:8123/v1\""))
         XCTAssertTrue(envText.contains("HERMES_WORKSPACE=\"\(workspace.path)\""))
-        XCTAssertTrue(envText.contains("TERMINAL_CWD=\"\(workspace.path)\""))
+        XCTAssertFalse(envText.contains("TERMINAL_CWD="), "deprecated .env key must not be written; terminal.cwd in config.yaml carries the workspace")
         XCTAssertTrue(envText.contains("HERMES_SESSION_PLATFORM=\"mtplx-app\""))
         XCTAssertTrue(envText.contains("TELEGRAM_BOT_TOKEN=\"fake-token\""))
         XCTAssertTrue(envText.contains("TELEGRAM_ALLOWED_USERS=\"123,456\""))

@@ -1736,11 +1736,15 @@ public struct HermesIntegration: Sendable {
         HERMES_MTPLX_GATEWAY_STATUS_COMMAND=\(dotenvQuote(gatewayStatusCommand))
         HERMES_MTPLX_GATEWAY_TRUTH_NOTE=\(dotenvQuote(gatewayTruthHint))
         HERMES_WORKSPACE=\(dotenvQuote(workspacePath))
-        TERMINAL_CWD=\(dotenvQuote(workspacePath))
         """
+        // The working directory is terminal.cwd in config.yaml (configYAML
+        // above); Hermes v0.21 deprecates TERMINAL_CWD in .env and warns on
+        // every launch while the line exists, and it bridges terminal.cwd
+        // into the TERMINAL_CWD process variable itself. SYNC PAIR:
+        // public._hermes_dotenv.
         if let reasoningEffort {
             // The literal above ends without a newline: appending straight
-            // onto it fused TERMINAL_CWD and this key into one line, which
+            // onto it fused the last key and this key into one line, which
             // Hermes' dotenv parser rejected ("could not parse statement"),
             // silently dropping both the working directory and the effort.
             text += "\nHERMES_MTPLX_REASONING_EFFORT=\(dotenvQuote(reasoningEffort))"
