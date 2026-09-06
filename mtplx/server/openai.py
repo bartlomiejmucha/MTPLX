@@ -2916,6 +2916,12 @@ class ServerState:
         from mtplx.retrieval import registry_from_args
 
         self.retrieval = registry_from_args(args)
+        # Same contract as the chat model: a reference that does not resolve
+        # refuses the launch. Before this, a mistyped or unpulled
+        # --embedding-model booted a daemon that printed "MTPLX is ready",
+        # listed the model on /v1/models, and then raised FileNotFoundError
+        # out of the loader on the first request (HTTP 500 with a traceback).
+        _refuse_unresolvable_retrieval_models(self.retrieval)
         self.started_at_s = time.time()
         self.lock = Lock()
         self.foreground_lock = Lock()
@@ -14557,6 +14563,12 @@ def _record_request_metrics(state: "ServerState", record: dict[str, Any]) -> Non
         )
     except Exception:
         pass
+    # Wall clock for the row. Every completion path (normal, cancelled,
+    # disconnected, the OpenCode title fast path) funnels through this sink,
+    # so stamping it here is what lets the dashboard's request log say when a
+    # request finished instead of rendering a dash. setdefault so a producer
+    # that already knows a more precise instant keeps it.
+    record.setdefault("completed_at_s", time.time())
     safe = _json_safe(record)
     # Warmup generations (startup pass and the idle background ladder) are
     # not user requests: keep them out of the RAM ring that feeds the
@@ -15584,6 +15596,13 @@ def _metrics_envelope(
         "producer_gaps_over_200ms": producer_gaps_over_200ms,
         "mtp_depth": int(mtp_depth),
         "verify_calls": int(stats.get("verify_calls") or 0),
+        # Aggregate draft counters. They are part of the public stats block
+        # already, but the dashboard envelope only carried the per-depth
+        # breakdown, so the dashboard's "N accepted of M drafted" line read
+        # two keys that were never in the payload and rendered as dashes.
+        "accepted_drafts": int(stats.get("accepted_drafts") or 0),
+        "rejected_drafts": int(stats.get("rejected_drafts") or 0),
+        "drafted_tokens": int(stats.get("drafted_tokens") or 0),
         "accepted_by_depth": stats.get("accepted_by_depth") or [],
         "drafted_by_depth": stats.get("drafted_by_depth") or [],
         "mean_accept_probability_by_depth": (
@@ -22444,6 +22463,9 @@ def _finalize_batched_ar_generation(
     envelope["mtp_depth"] = 0
     envelope["verify_calls"] = 0
     envelope["verify_time_s"] = 0.0
+    envelope["accepted_drafts"] = 0
+    envelope["rejected_drafts"] = 0
+    envelope["drafted_tokens"] = 0
     envelope["accepted_by_depth"] = []
     envelope["draft_time_s"] = 0.0
     for key in (
@@ -24614,6 +24636,9 @@ def _run_generation(
                 "verify_eval_unattributed_time_s",
             ):
                 envelope[key] = 0 if key.endswith(("rows", "windows", "calls")) else 0.0
+            envelope["accepted_drafts"] = 0
+            envelope["rejected_drafts"] = 0
+            envelope["drafted_tokens"] = 0
             envelope["accepted_by_depth"] = []
             envelope["draft_time_s"] = 0.0
         if request_observability:
@@ -30165,6 +30190,11 @@ def create_app(state: ServerState) -> FastAPI:
         if retrieval is not None and wanted in ("embedding", "rerank"):
             for descriptor in retrieval.descriptors():
                 if descriptor["role"] != wanted:
+                    continue
+                # Never advertise a model the daemon cannot load. Startup
+                # refuses unresolvable references, so this covers the case
+                # startup cannot: a checkpoint deleted while the daemon runs.
+                if not descriptor.get("resolved", True):
                     continue
                 entries.append(
                     {
@@ -36834,6 +36864,27 @@ def _start_aime_parent_watchdog_from_env() -> None:
     ).start()
 
 
+def _refuse_unresolvable_retrieval_models(registry: Any) -> None:
+    """Refuse to start when a configured retrieval model is not on disk.
+
+    Retrieval references stay symbolic until the server resolves them, so this
+    is the one place where --embedding-model / --reranker-model can be held to
+    the same "resolve it or do not start" contract the chat model already has.
+    The loader's own message is passed through verbatim: it carries the
+    `mtplx pull <repo>` hint the user needs.
+    """
+
+    failures = registry.unresolved() if registry is not None else []
+    if not failures:
+        return
+    flags = {"embedding": "--embedding-model", "rerank": "--reranker-model"}
+    lines = [
+        f"{flags.get(spec.role, spec.role)} {spec.model_ref}: {reason}"
+        for spec, reason in failures
+    ]
+    raise RetrievalError("\n".join(lines))
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     validate_server_security_args(args)
@@ -36841,7 +36892,7 @@ def main(argv: list[str] | None = None) -> None:
     _start_aime_parent_watchdog_from_env()
     try:
         state = ServerState(args)
-    except A3BMTPBatchInstallError as exc:
+    except (A3BMTPBatchInstallError, RetrievalError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2) from None
     app = create_app(state)

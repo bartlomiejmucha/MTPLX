@@ -527,3 +527,49 @@ def test_select_default_model_without_memory_keeps_generation_policy(monkeypatch
     assert selection.model == "Youssofal/Qwen3.5-4B-MTPLX-Optimized-Speed"
     assert selection.memory_gib is None
     assert "memory could not be read" in selection.reason
+
+
+# ---- README model table stays true to the catalog (issues #238, #408) -----
+
+_README_TABLE_ROW = re.compile(
+    r"^\|\s*`(?P<repo>Qwen[\w.\-]+|Gemma[\w.\-]+)`\s*\|"
+    r"(?P<fits>[^|]*)\|(?P<purpose>[^|]*)\|(?P<preset>[^|]*)\|\s*$"
+)
+_README_PEAK = re.compile(r"peaks at (?P<peak>[\d.]+) GiB")
+
+
+def _readme_model_rows() -> list[re.Match[str]]:
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
+        encoding="utf-8"
+    )
+    return [
+        match
+        for line in readme.splitlines()
+        if (match := _README_TABLE_ROW.match(line)) is not None
+    ]
+
+
+def test_readme_model_table_names_real_catalog_packs():
+    """Every repo the README recommends has to exist in the shipped catalog.
+
+    The table is a promise about what a user can download; a renamed or
+    retired pack must not survive in it silently.
+    """
+    rows = _readme_model_rows()
+    assert len(rows) >= 11, "the README model table lost rows"
+    catalog_repos = {model.hf_model_id for model in OFFICIAL_CATALOG}
+    for row in rows:
+        repo = f"Youssofal/{row.group('repo')}"
+        assert repo in catalog_repos, f"README names a pack the catalog does not ship: {repo}"
+
+
+def test_readme_model_table_quotes_the_catalog_peak_memory():
+    """The "fits" column is the number the app checks a Mac against."""
+    peaks = {model.hf_model_id: model.peak_memory_gib for model in OFFICIAL_CATALOG}
+    for row in _readme_model_rows():
+        repo = f"Youssofal/{row.group('repo')}"
+        stated = _README_PEAK.search(row.group("fits"))
+        assert stated is not None, f"README row for {repo} states no peak memory"
+        assert abs(float(stated.group("peak")) - peaks[repo]) <= 0.05, (
+            f"README peak for {repo} drifted from the catalog"
+        )

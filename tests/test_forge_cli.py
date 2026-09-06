@@ -2508,3 +2508,55 @@ def test_runtime_stamp_carries_family_sampler_law(tmp_path):
     assert runtime["sampler"]["temperature"] == 1.0
     assert runtime["sampler"]["top_p"] == 0.95
     assert runtime["sampler"]["top_k"] == 20
+
+
+def test_forge_reuses_a_source_already_on_disk(tmp_path, monkeypatch):
+    """Issue #445: a repo the machine already holds must not be pulled again."""
+    from mtplx.commands import forge as forge_module
+
+    snapshot = tmp_path / "models--org--name" / "snapshots" / "deadbeef"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "mtplx.hf_loader.resolve_model_path", lambda ref, cache_dir=None: snapshot
+    )
+
+    def never_pull(*args, **kwargs):
+        raise AssertionError("forge downloaded a source it already had")
+
+    monkeypatch.setattr(forge_module, "pull_model", never_pull)
+
+    run = tmp_path / "run"
+    run.mkdir()
+    path, repo_id, sha = forge_module._prepare_source("org/name", run, {})
+    assert path == snapshot
+    assert repo_id == "org/name"
+    # The sha describes the copy that was built from, not the remote tip.
+    assert sha == "deadbeef"
+
+
+def test_forge_still_pulls_a_source_that_is_not_on_disk(tmp_path, monkeypatch):
+    from mtplx.commands import forge as forge_module
+
+    def missing(ref, cache_dir=None):
+        raise FileNotFoundError(f"Model {ref} is not cached. Run: mtplx pull {ref}")
+
+    monkeypatch.setattr("mtplx.hf_loader.resolve_model_path", missing)
+    downloaded = tmp_path / "pulled"
+    downloaded.mkdir()
+    calls: list[str] = []
+
+    def fake_pull(repo_id, **kwargs):
+        calls.append(repo_id)
+        return {"path": str(downloaded), "size_bytes": 4}
+
+    monkeypatch.setattr(forge_module, "pull_model", fake_pull)
+
+    run = tmp_path / "run"
+    run.mkdir()
+    path, repo_id, _sha = forge_module._prepare_source(
+        "org/name", run, {"source_sha": "abc"}
+    )
+    assert calls == ["org/name"]
+    assert path == downloaded
+    assert repo_id == "org/name"

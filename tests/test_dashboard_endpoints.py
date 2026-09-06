@@ -1057,3 +1057,77 @@ def test_settings_post_toggles_adaptive_depth_policy_live():
         assert on.status_code == 400
         assert state.args.adaptive_policy == "none"
     assert client.post("/v1/mtplx/settings", json={"adaptive_policy": "always"}).status_code == 400
+
+
+# ---- request-log row contract (issue #401) --------------------------------
+
+
+def _request_envelope(stats: dict) -> dict:
+    return openai._metrics_envelope(
+        stats=stats,
+        prompt_tokens=64,
+        completion_tokens=32,
+        request_elapsed_s=2.0,
+        token_times=[],
+        request_started_s=0.0,
+        lock_wait_time_s=0.0,
+        session_id="session-1",
+        session_cache_hit=True,
+        cache_miss_reason=None,
+        session_restore_mode="near_prefix_clone",
+        mtp_depth=3,
+        generation_limits={},
+    )
+
+
+def test_request_envelope_carries_the_aggregate_draft_counters():
+    """The dashboard's "N accepted of M drafted" line reads these two keys.
+
+    They existed on GenerationStats and in the public stats block, but the
+    dashboard envelope carried only the per-depth breakdown, so both cells
+    rendered as dashes.
+    """
+    envelope = _request_envelope(
+        {
+            "verify_calls": 12,
+            "accepted_drafts": 27,
+            "rejected_drafts": 9,
+            "drafted_tokens": 36,
+            "accepted_by_depth": [12, 9, 6],
+            "drafted_by_depth": [12, 12, 12],
+        }
+    )
+    assert envelope["accepted_drafts"] == 27
+    assert envelope["rejected_drafts"] == 9
+    assert envelope["drafted_tokens"] == 36
+    # The per-depth breakdown still has to agree with the aggregate.
+    assert sum(envelope["accepted_by_depth"]) == envelope["accepted_drafts"]
+    assert sum(envelope["drafted_by_depth"]) == envelope["drafted_tokens"]
+
+
+def test_request_envelope_draft_counters_default_to_zero():
+    envelope = _request_envelope({"verify_calls": 0})
+    assert envelope["accepted_drafts"] == 0
+    assert envelope["rejected_drafts"] == 0
+    assert envelope["drafted_tokens"] == 0
+
+
+def test_every_recorded_request_carries_a_wall_clock(monkeypatch, tmp_path):
+    """The request log's `when` column needs an absolute time on every row."""
+    state = _fake_state()
+    state.last_metrics = []
+    before = time.time()
+    openai._record_request_metrics(state, {"request_id": "r1", "prompt_tokens": 1})
+    after = time.time()
+
+    row = state.last_metrics[-1]
+    assert before <= row["completed_at_s"] <= after
+
+
+def test_a_producer_supplied_wall_clock_is_kept():
+    state = _fake_state()
+    state.last_metrics = []
+    openai._record_request_metrics(
+        state, {"request_id": "r1", "completed_at_s": 1234.5}
+    )
+    assert state.last_metrics[-1]["completed_at_s"] == 1234.5

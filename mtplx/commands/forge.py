@@ -1191,6 +1191,35 @@ def _cmd_build(args: Any) -> int:
     return 0
 
 
+def _already_downloaded_source(repo_id: str) -> tuple[Path, str] | None:
+    """A copy of ``repo_id`` already on disk, and the revision it really is.
+
+    Forge went straight to `pull_model` for every repo id, so a source the
+    machine already held - MTPLX's own cache, or the shared Hugging Face cache
+    another MLX tool filled - was downloaded a second time. `resolve_model_path`
+    is the one lookup every other command uses, so forge now asks it first.
+    The returned sha comes from the copy itself (its pull marker, or the
+    commit-named snapshot directory of a Hugging Face cache entry) so the
+    provenance stamped on the built artifact describes what was actually
+    built from, never whatever revision the remote is at now.
+    """
+
+    try:
+        from mtplx.hf_loader import resolve_model_path
+
+        path = resolve_model_path(repo_id)
+    except Exception:
+        return None
+    if not path.is_dir():
+        return None
+    marker = read_source_marker(path) or {}
+    sha = str(marker.get("resolved_sha") or "")
+    if not sha and path.parent.name == "snapshots":
+        # Hugging Face cache layout: models--org--name/snapshots/<commit sha>.
+        sha = path.name
+    return path, sha
+
+
 def _prepare_source(source: str, run: Path, probe: dict[str, Any]) -> tuple[Path, str | None, str | None]:
     local, repo_id = _normalize_source(source)
     if local is not None:
@@ -1206,6 +1235,21 @@ def _prepare_source(source: str, run: Path, probe: dict[str, Any]) -> tuple[Path
         return local, None, None
     if repo_id is None:
         raise ForgeError("build requires a local path or Hugging Face repo id", code=2)
+
+    already = _already_downloaded_source(repo_id)
+    if already is not None:
+        path, sha = already
+        size = directory_size_bytes(path)
+        _write_download(
+            run,
+            bytes_on_disk=size,
+            total_bytes=size,
+            mb_per_s=0.0,
+            label="already downloaded",
+            finished=True,
+        )
+        _err(f"[forge] using the copy already on disk: {path}")
+        return path, repo_id, sha
 
     total = probe.get("estimated_size_bytes")
     started_at = time.monotonic()

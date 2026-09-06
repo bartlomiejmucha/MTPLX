@@ -2245,6 +2245,49 @@ def _git_value(args: list[str], *, cwd: Path) -> str | None:
     return proc.stdout.strip()
 
 
+def _validate_retrieval_models(args: Any) -> int | None:
+    """Refuse to launch when a --embedding-model/--reranker-model is missing.
+
+    The chat model is resolved here before the server child is started; the
+    retrieval references stay symbolic and used to be resolved only on the
+    first request, so a typo produced a daemon that said "MTPLX is ready" and
+    then answered HTTP 500 on /v1/embeddings. The server refuses the same
+    references too (a direct `python -m mtplx.server.openai` never passes
+    through here), but failing in the CLI is what puts the `mtplx pull` hint
+    in front of the user before any model load happens.
+    """
+
+    if not (
+        getattr(args, "embedding_model", None) or getattr(args, "reranker_model", None)
+    ):
+        return None
+    from mtplx.retrieval import registry_from_args
+
+    try:
+        failures = registry_from_args(args).unresolved()
+    except Exception as exc:
+        # A malformed REF=SERVED_ID value is a launch error too, and it is
+        # better named here than as an argparse-shaped failure in the child.
+        _print_serve_start_line(f"error: {exc}")
+        return 2
+    if not failures:
+        return None
+    from mtplx.hf_loader import repo_id_from_model_ref
+
+    flags = {"embedding": "--embedding-model", "rerank": "--reranker-model"}
+    for spec, reason in failures:
+        _print_serve_start_line(f"error: {reason}")
+        _print_serve_start_line(
+            f"flag: {flags.get(spec.role, spec.role)} {spec.model_ref}"
+        )
+        # A local path cannot be pulled; the loader message already says the
+        # path is missing, so only a repo id gets the download hint.
+        repo_id = repo_id_from_model_ref(spec.model_ref)
+        if repo_id:
+            _print_serve_start_line(f"try: mtplx pull {repo_id}")
+    return 1
+
+
 def _resolve_runtime_model_path(
     model: str, *, cache_dir: str | None = None
 ) -> tuple[str, dict[str, Any] | None]:
@@ -9531,6 +9574,9 @@ def cmd_serve_public(args: Any) -> int:
     if gate_exit is not None:
         _print_model_gate_error(inspection, printer=_print_serve_start_line)
         return gate_exit
+    retrieval_exit = _validate_retrieval_models(args)
+    if retrieval_exit is not None:
+        return retrieval_exit
     mode_exit = _apply_runtime_compatibility_mode(
         args,
         inspection,
