@@ -13,7 +13,7 @@ mtplx serve --model /path/to/model --port 8211 \
   --flight-recorder /path/to/run/flight.jsonl
 ```
 
-Point OpenCode or Pi at that port using the normal MTPLX integration. Let coding tasks stop naturally. Preserve both the client transcript and the generated project. To capture exact encoded token IDs for a local reproduction, set `MTPLX_REQUEST_CAPTURE_DIR` before starting the server. Captures contain prompt content; keep them local unless you intend to share that content.
+Point OpenCode or Pi at that port using the normal MTPLX integration. Let coding tasks stop naturally. Preserve both the client transcript and the generated project. To capture exact encoded token IDs for a local reproduction, set `MTPLX_REQUEST_CAPTURE_DIR` before starting the server. Captures contain prompt content; keep them local unless you intend to share that content. The capture folder is a ring: `MTPLX_REQUEST_CAPTURE_KEEP` (default 200) is how many `req-*.json` files stay in place; older ones move to a `pruned/` subfolder and are never deleted.
 
 ## Open the joined view
 
