@@ -1562,3 +1562,7 @@
 "Seconds a response may wait on a model that is making no progress before it is cancelled. 0 turns the watchdog off; long prompts and deep reasoning keep reporting progress and are never cut short by this." = "Seconds a response may wait on a model that is making no progress before it is cancelled. 0 turns the watchdog off; long prompts and deep reasoning keep reporting progress and are never cut short by this.";
 "Adaptive depth" = "Adaptive depth";
 "Stops a draft early when the next token is unlikely to be accepted. Off drafts to the full depth every cycle." = "Stops a draft early when the next token is unlikely to be accepted. Off drafts to the full depth every cycle.";
+"Appearance" = "Appearance";
+"Jet black, warm cream, or follow macOS." = "Jet black, warm cream, or follow macOS.";
+"Dark" = "Dark";
+"Light" = "Light";

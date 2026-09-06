@@ -1562,3 +1562,7 @@
 "Seconds a response may wait on a model that is making no progress before it is cancelled. 0 turns the watchdog off; long prompts and deep reasoning keep reporting progress and are never cut short by this." = "Сколько секунд ответ может ждать модель без прогресса, прежде чем будет отменён. 0 отключает сторож; длинные запросы и глубокие рассуждения продолжают сообщать о прогрессе и никогда не прерываются этим.";
 "Adaptive depth" = "Адаптивная глубина";
 "Stops a draft early when the next token is unlikely to be accepted. Off drafts to the full depth every cycle." = "Останавливает черновик раньше, если следующий токен вряд ли будет принят. Выключено: каждый цикл строит черновик на полную глубину.";
+"Appearance" = "Оформление";
+"Jet black, warm cream, or follow macOS." = "Насыщенный чёрный, тёплый кремовый или как в macOS.";
+"Dark" = "Тёмное";
+"Light" = "Светлое";
