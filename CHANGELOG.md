@@ -45,8 +45,8 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
-- **Request-capture registry no longer grows for the life of the daemon.**
-  With `MTPLX_REQUEST_CAPTURE_DIR` set, the in-memory map from request id
+- **Request-capture registry no longer grows for the life of the daemon**
+  (noticed in PR #356, PhilipJohnBasile). With `MTPLX_REQUEST_CAPTURE_DIR` set, the in-memory map from request id
   to capture file kept an entry for every request ever captured, including
   the ones the ring had already moved to `pruned/`; it now forgets an id
   as soon as its file leaves the ring.
