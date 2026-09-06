@@ -216,8 +216,8 @@ struct TuneStep: View {
                 }
             }
             Text(result.bestDepth == 0 && result.allCandidates.isEmpty
-                ? "Ready. Open the dashboard to use this model's backend defaults."
-                : "Ready. Open the dashboard to save this setup.")
+                ? tr("Ready. Open the dashboard to use this model's backend defaults.")
+                : tr("Ready. Open the dashboard to save this setup."))
                 .font(.system(size: 13))
                 .foregroundStyle(Brand.typeSecondary)
             if isSafeDefault(result) {

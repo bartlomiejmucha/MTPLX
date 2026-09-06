@@ -1566,3 +1566,13 @@
 "Jet black, warm cream, or follow macOS." = "Насыщенный чёрный, тёплый кремовый или как в macOS.";
 "Dark" = "Тёмное";
 "Light" = "Светлое";
+"Point any OpenAI- or Anthropic-compatible app at MTPLX." = "Подключите любое приложение, совместимое с OpenAI или Anthropic, к MTPLX.";
+"Pick how you want to use it." = "Выберите, как вы хотите его использовать.";
+"Auto-approve is on: Hermes runs tools without asking. Click to make it ask first. Applies next time Hermes starts." = "Автоподтверждение включено: Hermes запускает инструменты, не спрашивая. Нажмите, чтобы он сначала спрашивал. Вступит в силу при следующем запуске Hermes.";
+"Hermes will ask before running tools. Click to auto-approve (YOLO). Applies next time Hermes starts." = "Hermes будет спрашивать перед запуском инструментов. Нажмите для автоподтверждения (YOLO). Вступит в силу при следующем запуске Hermes.";
+"Hermes is a separate command-line agent. Install it once, then come back and start it from here." = "Hermes работает как отдельный агент командной строки. Установите его один раз, затем вернитесь сюда и запустите его отсюда.";
+"Your installed Hermes is too old for MTPLX. Update it, then recheck." = "Установленный у вас Hermes слишком старый для MTPLX. Обновите его, затем повторите проверку.";
+"Your Hermes agent is chatting in a Terminal window. Switch to it to keep going, or open a fresh one." = "Ваш агент Hermes общается в окне Terminal. Переключитесь на него, чтобы продолжить, или откройте новое.";
+"Hermes runs in a Terminal window with file, web, browser, and messaging tools. Open it to start chatting." = "Hermes работает в окне Terminal с инструментами для файлов, веба, браузера и сообщений. Откройте его, чтобы начать общение.";
+"Ready. Open the dashboard to use this model's backend defaults." = "Готово. Откройте панель управления, чтобы использовать настройки бэкенда по умолчанию для этой модели.";
+"Ready. Open the dashboard to save this setup." = "Готово. Откройте панель управления, чтобы сохранить эту конфигурацию.";

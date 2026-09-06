@@ -1566,3 +1566,13 @@
 "Jet black, warm cream, or follow macOS." = "纯黑、暖米色，或跟随 macOS。";
 "Dark" = "深色";
 "Light" = "浅色";
+"Point any OpenAI- or Anthropic-compatible app at MTPLX." = "将任何兼容 OpenAI 或 Anthropic 的应用指向 MTPLX。";
+"Pick how you want to use it." = "选择你想要的使用方式。";
+"Auto-approve is on: Hermes runs tools without asking. Click to make it ask first. Applies next time Hermes starts." = "自动批准已开启：Hermes 运行工具时不会询问。点按可改为先询问。下次启动 Hermes 时生效。";
+"Hermes will ask before running tools. Click to auto-approve (YOLO). Applies next time Hermes starts." = "Hermes 会在运行工具前询问。点按可自动批准（YOLO）。下次启动 Hermes 时生效。";
+"Hermes is a separate command-line agent. Install it once, then come back and start it from here." = "Hermes 是一个独立的命令行代理。安装一次后，回到这里启动它。";
+"Your installed Hermes is too old for MTPLX. Update it, then recheck." = "你安装的 Hermes 对 MTPLX 来说太旧了。更新后再重新检查。";
+"Your Hermes agent is chatting in a Terminal window. Switch to it to keep going, or open a fresh one." = "你的 Hermes 代理正在 Terminal 窗口中聊天。切换过去继续，或打开一个新窗口。";
+"Hermes runs in a Terminal window with file, web, browser, and messaging tools. Open it to start chatting." = "Hermes 在 Terminal 窗口中运行，带有文件、网页、浏览器和消息传递工具。打开它开始聊天。";
+"Ready. Open the dashboard to use this model's backend defaults." = "已就绪。打开仪表盘以使用此模型的后端默认设置。";
+"Ready. Open the dashboard to save this setup." = "已就绪。打开仪表盘以保存此设置。";

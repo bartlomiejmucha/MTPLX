@@ -1566,3 +1566,13 @@
 "Jet black, warm cream, or follow macOS." = "Noir intense, crème chaude ou suivre macOS.";
 "Dark" = "Sombre";
 "Light" = "Clair";
+"Point any OpenAI- or Anthropic-compatible app at MTPLX." = "Connectez toute application compatible OpenAI ou Anthropic à MTPLX.";
+"Pick how you want to use it." = "Choisissez comment vous voulez l'utiliser.";
+"Auto-approve is on: Hermes runs tools without asking. Click to make it ask first. Applies next time Hermes starts." = "Approbation auto activée : Hermes exécute les outils sans demander. Cliquez pour qu'il demande d'abord. S'applique au prochain démarrage d'Hermes.";
+"Hermes will ask before running tools. Click to auto-approve (YOLO). Applies next time Hermes starts." = "Hermes demandera avant d'exécuter des outils. Cliquez pour approuver automatiquement (YOLO). S'applique au prochain démarrage d'Hermes.";
+"Hermes is a separate command-line agent. Install it once, then come back and start it from here." = "Hermes est un agent en ligne de commande distinct. Installez-le une fois, puis revenez ici pour le démarrer.";
+"Your installed Hermes is too old for MTPLX. Update it, then recheck." = "Votre Hermes installé est trop ancien pour MTPLX. Mettez-le à jour, puis revérifiez.";
+"Your Hermes agent is chatting in a Terminal window. Switch to it to keep going, or open a fresh one." = "Votre agent Hermes dialogue dans une fenêtre Terminal. Passez-y pour continuer, ou ouvrez-en une nouvelle.";
+"Hermes runs in a Terminal window with file, web, browser, and messaging tools. Open it to start chatting." = "Hermes s'exécute dans une fenêtre Terminal avec des outils de fichiers, Web, de navigateur et de messagerie. Ouvrez-la pour commencer à dialoguer.";
+"Ready. Open the dashboard to use this model's backend defaults." = "Prêt. Ouvrez le tableau de bord pour utiliser les réglages par défaut du backend de ce modèle.";
+"Ready. Open the dashboard to save this setup." = "Prêt. Ouvrez le tableau de bord pour enregistrer cette configuration.";

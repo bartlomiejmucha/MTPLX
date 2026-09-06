@@ -1566,3 +1566,13 @@
 "Jet black, warm cream, or follow macOS." = "Jet siyahı, sıcak krem veya macOS ayarını izle.";
 "Dark" = "Koyu";
 "Light" = "Açık";
+"Point any OpenAI- or Anthropic-compatible app at MTPLX." = "OpenAI ya da Anthropic uyumlu herhangi bir uygulamayı MTPLX'e yönlendirin.";
+"Pick how you want to use it." = "Nasıl kullanmak istediğinizi seçin.";
+"Auto-approve is on: Hermes runs tools without asking. Click to make it ask first. Applies next time Hermes starts." = "Otomatik onay açık: Hermes araçları sormadan çalıştırır. Önce sormasını istiyorsanız tıklayın. Hermes'in bir sonraki başlatılışında geçerli olur.";
+"Hermes will ask before running tools. Click to auto-approve (YOLO). Applies next time Hermes starts." = "Hermes araçları çalıştırmadan önce sorar. Otomatik onay (YOLO) için tıklayın. Hermes'in bir sonraki başlatılışında geçerli olur.";
+"Hermes is a separate command-line agent. Install it once, then come back and start it from here." = "Hermes ayrı bir komut satırı aracısıdır. Bir kez kurun, sonra buraya dönüp buradan başlatın.";
+"Your installed Hermes is too old for MTPLX. Update it, then recheck." = "Kurulu Hermes sürümünüz MTPLX için çok eski. Güncelleyin, sonra yeniden kontrol edin.";
+"Your Hermes agent is chatting in a Terminal window. Switch to it to keep going, or open a fresh one." = "Hermes aracınız bir Terminal penceresinde sohbet ediyor. Devam etmek için o pencereye geçin ya da yeni bir pencere açın.";
+"Hermes runs in a Terminal window with file, web, browser, and messaging tools. Open it to start chatting." = "Hermes, dosya, web, tarayıcı ve mesajlaşma araçlarıyla bir Terminal penceresinde çalışır. Sohbete başlamak için pencereyi açın.";
+"Ready. Open the dashboard to use this model's backend defaults." = "Hazır. Bu modelin arka uç varsayılanlarını kullanmak için panoyu açın.";
+"Ready. Open the dashboard to save this setup." = "Hazır. Bu kurulumu kaydetmek için panoyu açın.";

@@ -185,7 +185,10 @@ struct ChatSidebarView: View {
 
     @MainActor
     private static func relativeDate(_ date: Date) -> String {
-        relativeDateFormatter.localizedString(for: date, relativeTo: Date())
+        // Follow the in-app language, not the macOS locale, so the row
+        // subtitle matches the rest of the sidebar after a live switch.
+        relativeDateFormatter.locale = L10n.language.locale
+        return relativeDateFormatter.localizedString(for: date, relativeTo: Date())
     }
 }
 

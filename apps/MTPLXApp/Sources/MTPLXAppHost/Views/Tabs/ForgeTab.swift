@@ -274,6 +274,7 @@ private struct OrphanRunRow: View {
     private func relativeTime(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
+        formatter.locale = L10n.language.locale
         return formatter.localizedString(for: date, relativeTo: Date())
     }
 }

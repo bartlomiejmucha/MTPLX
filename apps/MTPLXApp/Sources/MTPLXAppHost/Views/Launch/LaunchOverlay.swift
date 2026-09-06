@@ -163,8 +163,8 @@ struct LaunchOverlay: View, Equatable {
                     .font(.system(.callout, design: .rounded).weight(.semibold))
                     .foregroundStyle(Brand.typeBody)
                 Text(otherExpanded
-                     ? "Point any OpenAI- or Anthropic-compatible app at MTPLX."
-                     : "Pick how you want to use it.")
+                     ? tr("Point any OpenAI- or Anthropic-compatible app at MTPLX.")
+                     : tr("Pick how you want to use it."))
                     .font(.caption2)
                     .foregroundStyle(Brand.typeTertiary)
             }

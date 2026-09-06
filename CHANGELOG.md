@@ -20,6 +20,15 @@ All notable user-facing changes to MTPLX. The format is based on
 - **Appearance row localized.** The Settings row for Appearance (its title,
   caption and the System, Dark and Light segments) was English in every
   language; it now follows the app language in all thirteen tables.
+- **Chat sidebar and Forge timestamps follow the app language.** The
+  relative times under each chat row and in the Forge tab were formatted
+  in the macOS locale, so a Turkish app still read "in 0 sec"; both now
+  use the active app language.
+- **Launch chooser, Hermes overlay and tune-step captions localized.** Five
+  captions (the launch chooser's "Pick how you want to use it." and custom
+  client note, the Hermes auto-approve, install-status and Terminal notes,
+  and the tune step's ready line) were English in every language; the ten
+  strings now resolve through the app language in all thirteen tables.
 - **Turkish** (issue #470). The app ships a thirteenth language table
   (Türkçe, 1,562 strings) next to the twelve from 2.11.
 - **Remove a stale custom model from the picker** (PR #471, nRanzo). A

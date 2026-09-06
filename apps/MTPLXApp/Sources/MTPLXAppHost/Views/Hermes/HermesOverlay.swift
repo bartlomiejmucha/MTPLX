@@ -65,8 +65,8 @@ struct HermesOverlay: View {
         }
         .buttonStyle(.plain)
         .help(on
-            ? "Auto-approve is on: Hermes runs tools without asking. Click to make it ask first. Applies next time Hermes starts."
-            : "Hermes will ask before running tools. Click to auto-approve (YOLO). Applies next time Hermes starts.")
+            ? tr("Auto-approve is on: Hermes runs tools without asking. Click to make it ask first. Applies next time Hermes starts.")
+            : tr("Hermes will ask before running tools. Click to auto-approve (YOLO). Applies next time Hermes starts."))
         .accessibilityLabel(on ? tr("Auto-approve on, tap to require approval") : tr("Approval required, tap to auto-approve"))
     }
 }
@@ -206,8 +206,8 @@ struct HermesPanel: View {
                     .foregroundStyle(Brand.typeBody)
 
                 Text(status.kind == .missing
-                    ? "Hermes is a separate command-line agent. Install it once, then come back and start it from here."
-                    : "Your installed Hermes is too old for MTPLX. Update it, then recheck.")
+                    ? tr("Hermes is a separate command-line agent. Install it once, then come back and start it from here.")
+                    : tr("Your installed Hermes is too old for MTPLX. Update it, then recheck."))
                     .font(.caption)
                     .foregroundStyle(Brand.typeSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -693,8 +693,8 @@ struct HermesPanel: View {
                 .foregroundStyle(Brand.typeBody)
 
             Text(hermes.terminalAgentRunning
-                ? "Your Hermes agent is chatting in a Terminal window. Switch to it to keep going, or open a fresh one."
-                : "Hermes runs in a Terminal window with file, web, browser, and messaging tools. Open it to start chatting.")
+                ? tr("Your Hermes agent is chatting in a Terminal window. Switch to it to keep going, or open a fresh one.")
+                : tr("Hermes runs in a Terminal window with file, web, browser, and messaging tools. Open it to start chatting."))
                 .font(.callout)
                 .foregroundStyle(Brand.typeSecondary)
                 .multilineTextAlignment(.center)
