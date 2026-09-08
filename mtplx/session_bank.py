@@ -1703,18 +1703,22 @@ class SessionBank:
         # restore must land on a token where the recurrent state is *known*,
         # not merely where the KV can trim. Restoring KV to `matched` while
         # recurrent state stays at the stored end silently degrades answers
-        # (Desktop QA, pre-v2). Tiny gaps (<= near-prefix gap limit) keep the
-        # long-shipped tokenizer-drift tolerance; anything larger requires a
-        # stored boundary <= matched and restores there instead, with the
-        # caller re-prefilling (boundary, prompt_end].
+        # (Desktop QA, pre-v2). The attention KV can be trimmed exactly for
+        # any gap; the GDN/conv state cannot be trimmed at all, so on a
+        # recurrent entry EVERY partial restore -- including the 1-8 token
+        # "tokenizer drift" seams a re-rendered agent turn produces -- must
+        # land on a stored recurrent boundary <= matched, with the caller
+        # re-prefilling (boundary, prompt_end]. Until 2026-09-08 gaps up to
+        # the near-prefix limit kept the KV-only tolerance on hybrid entries
+        # too, which decoded the whole turn on GDN state that had consumed up
+        # to eight tokens the new prompt does not contain plus one token
+        # twice (three audits reproduced it; the tolerance only ever held on
+        # attention-only models, where the trim IS the boundary).
         restore_point = matched
         boundary_snapshot: CacheSnapshot | None = None
         boundary_hidden: Any | None = None
         gap_from_entry = int(entry.prefix_len) - matched
-        needs_boundary = (
-            bool(entry.has_recurrent)
-            and gap_from_entry > _near_prefix_tiny_gap_limit()
-        )
+        needs_boundary = bool(entry.has_recurrent)
         if needs_boundary:
             boundary = entry.recurrent_boundary_at_or_below(matched)
             if boundary is None:

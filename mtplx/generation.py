@@ -3766,24 +3766,23 @@ def _restore_near_prefix_prompt_state(
             _near_debug("missing_committed_mtp_history")
             continue
         if getattr(entry, "has_recurrent", False):
-            gap_from_entry = int(getattr(entry, "prefix_len", 0) or 0) - matched
-            if gap_from_entry > max_gap:
-                # Boundary-true restores land at the newest recurrent boundary
-                # at/below `matched`, not at `matched` itself. A candidate is
-                # only worth taking when that achievable point still beats the
-                # exact-prefix alternative — otherwise a boundary-quantized
-                # restore silently LOSES tokens vs the plain exact restore
-                # (observed: block candidate matched=2560 restoring at 2354
-                # while an exact 2383-entry existed).
-                probe = getattr(entry, "recurrent_boundary_at_or_below", None)
-                achievable = 0
-                if callable(probe):
-                    boundary_probe = probe(matched)
-                    if boundary_probe is not None:
-                        achievable = int(boundary_probe[0])
-                if achievable <= int(min_restore_tokens):
-                    _near_debug(f"boundary_not_better:{achievable}")
-                    continue
+            # Every partial restore of a recurrent entry lands at the newest
+            # recurrent boundary at/below `matched`, not at `matched` itself
+            # (the GDN state cannot be trimmed; tiny gaps included since
+            # 2026-09-08). A candidate is only worth taking when that
+            # achievable point still beats the exact-prefix alternative --
+            # otherwise a boundary-quantized restore silently LOSES tokens vs
+            # the plain exact restore (observed: block candidate matched=2560
+            # restoring at 2354 while an exact 2383-entry existed).
+            probe = getattr(entry, "recurrent_boundary_at_or_below", None)
+            achievable = 0
+            if callable(probe):
+                boundary_probe = probe(matched)
+                if boundary_probe is not None:
+                    achievable = int(boundary_probe[0])
+            if achievable <= int(min_restore_tokens):
+                _near_debug(f"boundary_not_better:{achievable}")
+                continue
 
         prefix_restore = None
         cache_restore_time_s = 0.0
@@ -10175,6 +10174,20 @@ def generate_mtpk(
         if len(tokens) >= max_tokens or _is_stop(primary, stop_token_ids):
             if stop_origin is None and _is_stop(primary, stop_token_ids):
                 stop_origin = "primary"
+            # The primary that ends the response here -- freshly sampled from
+            # the last row, or a deferred correction / bonus folded into this
+            # cycle -- has been COMMITTED but never FORWARDED: the verify that
+            # would have consumed it never runs. Re-arm it as the pending
+            # primary so the final-pending commit below extends the trunk
+            # cache (and the committed MTP history) by exactly this token.
+            # Without it the banked generation-final state is one token short
+            # of the prompt+tokens key the server files it under, and the
+            # next warm turn decodes as if this turn's terminator never
+            # existed; positions stay contiguous so nothing downstream can
+            # tell (three audits, 2026-09-07/08; the greedy deferred
+            # correction was the common trigger, temperature-0 agent clients
+            # such as Cline hit it every turn).
+            pending_primary = int(primary)
             emit_round(event)
             emit_trace()
             break
@@ -13249,6 +13262,21 @@ def generate_mtpk(
     elapsed = time.perf_counter() - started_all
     final_state: GenerationFinalState | None = None
     if (
+        capture_final_state
+        and pending_primary is not None
+        and tokens
+        and repetition_result is None
+        and a3b_rebase_state is not None
+    ):
+        # The compiled A3B routes keep the accepted-prefix state in a stash
+        # that only their next verify installs; the live trunk cache still
+        # holds the rejected rows. A one-row forward_ar from it would land
+        # the pending token on the wrong positions, so leave pending_primary
+        # set: the final state below reports safe_to_commit=False and the
+        # bank declines this turn (a cold/near-prefix next turn, never a
+        # corrupted one).
+        events.append({"final_state_capture_skipped": "a3b_rebase_pending"})
+    elif (
         capture_final_state
         and pending_primary is not None
         and tokens
