@@ -81,6 +81,7 @@ from .graphbank import (
     _fixed_m4_initial_growth_reserve,
     cache_array_tree,
     compiled_verify_mode,
+    ensure_eager_window_capacity,
     paged_offsets_context_ok as _paged_offsets_context_ok,
     promote_kv_cache_offsets,
     set_paged_offsets_context_ok,
@@ -10508,6 +10509,16 @@ def generate_mtpk(
                                 cache,
                                 committed_count=len(tokens) - 1,
                                 window_tokens=_cc_T,
+                            )
+                        # Generic (non fixed-M4) banks reserve nothing for a
+                        # copy window; grow their fixed buffers before the
+                        # forward builds its mask. Without this a block that
+                        # straddled the growth edge lost its rows past the
+                        # end (functional clamp) or failed the write.
+                        _cc_grown = ensure_eager_window_capacity(cache, _cc_T)
+                        if _cc_grown:
+                            event["ccopy_capacity_growths"] = (
+                                int(event.get("ccopy_capacity_growths", 0)) + 1
                             )
                         _cc_logits, _cc_hidden, _cc_captures = rt.forward_ar_capture(
                             mx.array([[primary] + _cc_block]),

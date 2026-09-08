@@ -894,6 +894,31 @@ class TensorOffsetQSACache:
         return entry
 
 
+def ensure_eager_window_capacity(cache: Any, window_tokens: int) -> int:
+    """Grow every ``TensorOffsetKVCache`` entry so one eager forward of
+    ``window_tokens`` rows fits; returns how many entries grew.
+
+    The eager copy-block route writes ``1 + block`` rows into these fixed
+    buffers outside the bank's own reservation. The growth has to happen
+    before the forward: the attention mask is built once per forward from
+    the first full-attention layer's capacity, so a buffer that grows inside
+    a layer's update no longer matches the mask. Every full-attention layer
+    holds the same token count, so the offset is read once.
+    """
+
+    grown = 0
+    size = None
+    for entry in cache or []:
+        if not isinstance(entry, TensorOffsetKVCache) or entry.keys is None:
+            continue
+        if size is None:
+            size = entry.size()
+        needed = size + max(1, int(window_tokens))
+        if needed > int(entry.keys.shape[2]):
+            entry.ensure_capacity(needed)
+            grown += 1
+    return grown
+
 def promote_kv_cache_offsets(
     cache: Any,
     *,

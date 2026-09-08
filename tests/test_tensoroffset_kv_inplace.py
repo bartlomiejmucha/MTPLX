@@ -14,7 +14,7 @@ tracer. These tests run on CPU with a realistic 262K-capacity buffer.
 import mlx.core as mx
 import pytest
 
-from mtplx.graphbank import TensorOffsetKVCache
+from mtplx.graphbank import TensorOffsetKVCache, ensure_eager_window_capacity
 
 
 CAP = 262144          # fixed-bank capacity at the pack's 262K context
@@ -201,3 +201,25 @@ def test_functional_slice_update_clamps_silently_documented():
     out = mx.slice_update(buf, upd, mx.array(20), axes=(2,))
     mx.eval(out)
     assert int(mx.sum(out[0, 0, :, 0]).item()) == 12
+
+
+def test_eager_window_preflight_grows_only_entries_at_the_edge():
+    # The copy-block route calls this before its forward so the mask the
+    # forward builds from the first full-attention layer's capacity matches
+    # every layer's buffer. Entries with room are left alone; other cache
+    # types and empty slots are skipped.
+    def _entry(cap, off):
+        k = mx.zeros((1, H_KV, cap, D), mx.bfloat16)
+        v = mx.zeros((1, H_KV, cap, D), mx.bfloat16)
+        mx.eval(k, v)
+        c = TensorOffsetKVCache(k, v, off, step=16)
+        c._granted = True
+        return c
+    tight = _entry(64, 52)
+    roomy = _entry(128, 52)
+    cache = [None, "linear-layer-state", tight, roomy]
+    assert ensure_eager_window_capacity(cache, 25) == 1
+    assert int(tight.keys.shape[2]) == 80 and tight.growth_after_grant is True
+    assert int(roomy.keys.shape[2]) == 128 and roomy.growth_after_grant is False
+    assert ensure_eager_window_capacity(cache, 25) == 0
+    assert ensure_eager_window_capacity([], 25) == 0
