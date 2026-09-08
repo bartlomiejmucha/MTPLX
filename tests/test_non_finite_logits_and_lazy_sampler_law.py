@@ -97,3 +97,18 @@ def test_lazy_sample_draws_a_finite_token_from_the_support():
         token = _mx_lazy_sample(row, config, sub)
         mx.eval(token)
         assert int(token.item()) in support
+
+
+@pytest.mark.parametrize("temperature", [0.0, 0.7])
+def test_masked_minus_inf_rows_are_legitimate(temperature):
+    """Grammar masks and penalties put -inf on illegal tokens: not a fault."""
+
+    row = mx.array([float("-inf"), 2.0, float("-inf"), 1.0], dtype=mx.float32)
+    config = SamplerConfig(temperature=temperature, top_p=0.95, top_k=20)
+    token, _ = _sample_from_logits(row, config, np.random.default_rng(0))
+    assert token in (1, 3)
+    if temperature == 0.0:
+        assert token == 1
+    ids, log_weights, bad = _mx_lazy_shape(mx.concatenate([row, mx.zeros((28,), dtype=mx.float32)]), SamplerConfig(temperature=1.0, top_p=0.95, top_k=4))
+    mx.eval(bad)
+    assert not bool(bad.item())

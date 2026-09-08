@@ -5223,12 +5223,14 @@ def _sample_from_logits(
                 config.frequency_penalty,
                 penalty_overlay=penalty_overlay,
             )
-        # argmax of a NaN row is token 0 (``!``); one extra reduction in the
-        # same eval keeps the greedy lane as loud as the sampled one.
+        # argmax of a NaN row is token 0 (``!``); two tiny reductions in the
+        # same eval keep the greedy lane as loud as the sampled one. -inf on
+        # its own is legitimate (grammar masks, penalties); NaN anywhere or a
+        # non-finite maximum (+inf, or every token masked) is the fault.
         chosen = mx.argmax(logits, axis=-1)
-        finite = mx.all(mx.isfinite(logits))
-        _eval(chosen, finite)
-        if not bool(finite.item()):
+        bad = mx.logical_or(mx.any(mx.isnan(logits)), mx.isinf(mx.max(logits)))
+        _eval(chosen, bad)
+        if bool(bad.item()):
             row = np.asarray(logits.astype(mx.float32))
             raise non_finite_logits_error(row, "greedy argmax")
         return int(chosen.item()), None
