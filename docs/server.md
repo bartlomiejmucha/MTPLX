@@ -129,6 +129,32 @@ unaffected. A periodic re-warm, or growing that LRU to cover the hot set the
 hotness file already identifies, is the follow-up - deliberately not part of
 this change.
 
+## Warm session cache (RAM bank) limits
+
+Every conversation's KV state is kept warm in RAM after a turn so the next
+message in that conversation restores instead of re-reading the prompt. Nothing
+in the daemon drops warm state on a short clock: the only idle timer is one
+hour, and the ten-minute number that appears in the code decides which
+session is evicted *first* when the cache is over budget, not whether anything
+is evicted at all. `/health` reports the live values under `session_bank`
+(`idle_ttl_s`, `active_pin_ttl_s`, the byte budgets and, after a miss,
+`last_miss_reason`).
+
+These environment variables are read by the daemon at start (`mtplx start`,
+`mtplx serve`, and the app's daemon, which inherits the login environment):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MTPLX_SESSION_BANK_IDLE_TTL_S` | `3600` | Seconds a warm entry and its session may sit untouched before the idle sweep drops them. `0` disables the sweep: entries live until the byte budgets, real memory pressure or a restart take them (the SSD tier keeps its copy either way). |
+| `MTPLX_SESSION_BANK_ACTIVE_PIN_TTL_S` | `600` | Sessions that touched the cache within this many seconds are evicted last when the cache is over budget. `0` turns the preference off. |
+| `MTPLX_SESSION_BANK_MAX_BYTES` | `auto` | Total warm-cache budget. `auto` is half of the RAM left after the model weights, floored at 1 GiB and capped at 48 GiB. Sizes such as `24G` are accepted. |
+| `MTPLX_SESSION_BANK_PER_SESSION_BYTES` | `auto` | Budget for one conversation's warm state. Sizes such as `12G` are accepted. |
+| `MTPLX_SESSION_BANK_MAX_ENTRIES` | `24` (`48` on Macs with 96 GB or more) | Maximum number of warm entries across all conversations. |
+
+A long conversation that starts over after a pause is a cache *miss*, not an
+expiry: open `/health` right after the slow turn and read
+`session_bank.last_miss_reason` and `last_prefix_diagnostic`.
+
 ## Sharing on your network (other devices, Parallels/VM guests)
 
 The default bind is `127.0.0.1`: only this Mac can connect. To reach MTPLX

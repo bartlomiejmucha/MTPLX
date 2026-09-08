@@ -165,6 +165,32 @@ def _session_bank_max_entries() -> int:
     return _bank_entries_from_env("MTPLX_SESSION_BANK_MAX_ENTRIES", default)
 
 
+def session_bank_idle_ttl_s() -> float:
+    """MTPLX_SESSION_BANK_IDLE_TTL_S: seconds a warm entry (and its session)
+    may sit untouched before the idle sweep drops it. Default 3600. ``0``
+    disables the sweep: entries then live until the byte budgets, real
+    memory pressure or a restart take them (the SSD tier still keeps them).
+    Issue #481 asked for this knob; nothing else in the daemon expires warm
+    state on idle time alone.
+    """
+    raw = os.environ.get("MTPLX_SESSION_BANK_IDLE_TTL_S")
+    if raw is None or not str(raw).strip():
+        return float(DEFAULT_IDLE_TTL_S)
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning(
+            "MTPLX_SESSION_BANK_IDLE_TTL_S=%r is not a number; using %s",
+            raw,
+            DEFAULT_IDLE_TTL_S,
+        )
+        return float(DEFAULT_IDLE_TTL_S)
+    if value != value:  # NaN
+        return float(DEFAULT_IDLE_TTL_S)
+    # SessionBank rejects <= 0 (idle_ttl_s must be > 0); infinity is "never".
+    return value if value > 0 else float("inf")
+
+
 def _default_per_session_max_bytes() -> int:
     total_ram = _detect_total_ram_bytes_for_session_bank()
     if (
@@ -1600,11 +1626,13 @@ class EngineSessionManager:
         self,
         *,
         bank: SessionBank | None = None,
-        idle_ttl_s: float = DEFAULT_IDLE_TTL_S,
+        idle_ttl_s: float | None = None,
         cold_tier: Any | None = None,
         model_weights_bytes: int | None = None,
         memory_plan: Any | None = None,
     ) -> None:
+        if idle_ttl_s is None:
+            idle_ttl_s = session_bank_idle_ttl_s()
         # Byte caps resolve model-aware by default (v2): unset or "auto" env
         # gives the bank half of the RAM surplus left after the model weights
         # (floored 1 GiB, capped 48 GiB), so a 32 GB Mac never inherits the

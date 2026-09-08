@@ -289,3 +289,43 @@ def test_manager_uses_auto_budget_for_bank(monkeypatch):
     assert manager.bank.max_bytes == expected
     # 2/3 of the 22.5G budget = 15G, clamped to the <96G tier ceiling (#150).
     assert manager.bank.per_session_max_bytes == 8 * GIB
+
+
+def test_idle_ttl_default_when_unset(monkeypatch):
+    monkeypatch.delenv("MTPLX_SESSION_BANK_IDLE_TTL_S", raising=False)
+    es = _engine_session()
+    assert es.session_bank_idle_ttl_s() == float(es.DEFAULT_IDLE_TTL_S)
+
+
+def test_idle_ttl_reads_seconds(monkeypatch):
+    monkeypatch.setenv("MTPLX_SESSION_BANK_IDLE_TTL_S", "7200")
+    es = _engine_session()
+    assert es.session_bank_idle_ttl_s() == 7200.0
+
+
+@pytest.mark.parametrize("raw", ["0", "-5", "0.0"])
+def test_idle_ttl_zero_means_never(monkeypatch, raw):
+    monkeypatch.setenv("MTPLX_SESSION_BANK_IDLE_TTL_S", raw)
+    es = _engine_session()
+    assert es.session_bank_idle_ttl_s() == float("inf")
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "soon", "nan"])
+def test_idle_ttl_garbage_falls_back_to_default(monkeypatch, raw):
+    monkeypatch.setenv("MTPLX_SESSION_BANK_IDLE_TTL_S", raw)
+    es = _engine_session()
+    assert es.session_bank_idle_ttl_s() == float(es.DEFAULT_IDLE_TTL_S)
+
+
+def test_manager_never_expires_sessions_when_ttl_is_off(monkeypatch):
+    """Issue #481: the only idle clock in the daemon is this one; with the
+    knob at 0 a day-old session is still warm."""
+    monkeypatch.setenv("MTPLX_SESSION_BANK_IDLE_TTL_S", "0")
+    es = _engine_session()
+    session = es.EngineSession("s-481", idle_ttl_s=es.session_bank_idle_ttl_s())
+    assert session.idle_ttl_s == float("inf")
+    assert not session.is_stale(now_s=session.last_access_s + 86_400.0)
+    monkeypatch.setenv("MTPLX_SESSION_BANK_IDLE_TTL_S", "60")
+    session = es.EngineSession("s-481b", idle_ttl_s=es.session_bank_idle_ttl_s())
+    assert session.is_stale(now_s=session.last_access_s + 61.0)
+    assert not session.is_stale(now_s=session.last_access_s + 59.0)
