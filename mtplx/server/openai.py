@@ -21997,6 +21997,8 @@ def _store_generation_final_history_snapshot(
         "history_suffix_tokens": int(compatibility.get("history_suffix_tokens") or 0),
         "token_hash": entry.token_hash,
     }
+    if "token_splice" in compatibility:
+        outcome["token_splice"] = compatibility["token_splice"]
     _flight(state).pc(session_id, {"action": "generation_final", **outcome})
     return outcome
 

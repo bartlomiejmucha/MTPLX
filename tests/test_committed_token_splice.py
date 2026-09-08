@@ -288,6 +288,33 @@ def test_generation_final_snapshot_accepts_a_history_that_splices_onto_the_strea
     assert state.sessions.bank.puts[0]["token_ids"] == final
 
 
+def test_generation_final_snapshot_accepts_a_length_cut_turn_ending_in_whitespace(monkeypatch):
+    # The dump from the 27B probe: the committed turn ends in a newline token
+    # the response stripped, so the re-rendered history puts the end-of-turn
+    # marker where the newline was. The snapshot must still be an O(1) prefix
+    # of the history, not a refused mismatch.
+    prompt_ids = [1, 2, 3]
+    generated = [WORD, COLON, NL]
+    history = [1, 2, 3, WORD, COLON, IM_END, NL]
+    monkeypatch.setattr(oa, "_history_ids_for_postcommit", lambda *a, **k: (list(history), None))
+    state = _postcommit_state(tokenizer=VocabTokenizer(WS_VOCAB))
+    result = _store_generation_final_history_snapshot(
+        state,
+        session_id="session-1",
+        prompt_ids=prompt_ids,
+        generated={"tokens": generated, "_final_state": _final_state(generated)},
+        messages=[ChatMessage(role="user", content="hi")],
+        assistant_content="word:",
+        thinking_enabled=False,
+        policy_fingerprint="policy",
+    )
+    assert result["stored"] is True
+    assert result["mode"] == "generation_final_prefix"
+    assert result["reason"] == "generation_boundary_prefix_of_history_after_splice"
+    assert result["token_splice"]["whitespace_tokens"] == 1
+    assert state.sessions.bank.puts[0]["token_ids"] == prompt_ids + generated
+
+
 def test_generation_final_snapshot_still_refuses_a_rewritten_turn(monkeypatch):
     prompt_ids = [1, 2, 3]
     generated = [4, QUOTE_NOTHING, 5, 6]
