@@ -522,6 +522,18 @@ class TensorOffsetKVCache:
             # copy of the pre-write rows, so the in-place write cannot corrupt
             # it and a later ``trim`` restores exactly the same bytes.
             end = off_i + steps
+            if end > int(self.cache[0].shape[2]):
+                # A write past the granted capacity. The functional path
+                # below clamps silently (MLX drops the rows that do not fit
+                # while the offset still advances past them), which is how
+                # a copy block straddling the growth edge lost its KV rows
+                # on the eager copy-block route; an in-place assignment
+                # refuses the shape instead. Grow first, as the stock
+                # KVCache does. ``ensure_capacity`` flips
+                # ``growth_after_grant`` on a granted leaf, so the bank
+                # demotes the request rather than replaying a compiled graph
+                # over the old buffers.
+                self.ensure_capacity(end)
             snap_k = mx.contiguous(self.cache[0][:, :, off_i:end, :])
             snap_v = mx.contiguous(self.cache[1][:, :, off_i:end, :])
             mx.eval(snap_k, snap_v)

@@ -163,3 +163,41 @@ def test_concrete_offset_detects_tracer_vs_value():
 
     mx.eval(_probe(mx.array(3, mx.int32)))
     assert seen["concrete"] is None
+
+
+def test_eager_write_past_capacity_grows_instead_of_dropping_rows():
+    # The copy-block route writes 1 + block rows in one eager update. When
+    # that window straddles the granted capacity, the functional path
+    # clamped silently (MLX drops the rows that do not fit and the offset
+    # still advances past them) and the in-place write refused the shape.
+    # The buffer must grow first so every row lands and the offset is right.
+    keys = mx.zeros((1, H_KV, 64, D), mx.bfloat16)
+    values = mx.zeros((1, H_KV, 64, D), mx.bfloat16)
+    mx.eval(keys, values)
+    cache = TensorOffsetKVCache(keys, values, 52, step=16)
+    cache._granted = True
+    new_k = mx.full((1, H_KV, 25, D), 1.0, mx.bfloat16)
+    new_v = mx.full((1, H_KV, 25, D), 2.0, mx.bfloat16)
+    k, v = cache.update_and_fetch(new_k, new_v)
+    mx.eval(k, v)
+    assert int(k.shape[2]) == 80 and int(v.shape[2]) == 80  # 77 rounded up to the 16-row step
+    assert cache.size() == 77
+    assert mx.array_equal(k[:, :, 52:77, :], new_k).item()
+    assert mx.array_equal(v[:, :, 52:77, :], new_v).item()
+    assert cache.growth_after_grant is True
+    # The rollback snapshot still covers the whole write: trim restores the
+    # pre-write rows (zeros) and the pre-write offset.
+    assert cache.trim(25) == 25
+    assert cache.size() == 52
+    assert not mx.any(cache.keys[:, :, 52:77, :] != 0).item()
+    assert not mx.any(cache.values[:, :, 52:77, :] != 0).item()
+
+
+def test_functional_slice_update_clamps_silently_documented():
+    # The behaviour the fix guards against, pinned so a future MLX change is
+    # noticed: a functional write past the end drops the overflow rows.
+    buf = mx.zeros((1, H_KV, 32, D), mx.bfloat16)
+    upd = mx.ones((1, H_KV, 25, D), mx.bfloat16)
+    out = mx.slice_update(buf, upd, mx.array(20), axes=(2,))
+    mx.eval(out)
+    assert int(mx.sum(out[0, 0, :, 0]).item()) == 12
