@@ -87,21 +87,31 @@ mirrored here in float64::
 clipped at 1 instead of each factor being clipped and then multiplied, and
 depth ``d``'s accept coin is allowed to look at the depth ``d+1`` rows::
 
-    c_0 = 1 ; w_0 = 1
+    Abar_0 = 1 ; w_{-1} = w_0 = 1
     for d in 1..3:
-        rho_d = p_d(x_d) / q_d(x_d)
-        A_d   = min(1, c_{d-1} * rho_d)               # reach BUDGET
+        rho_d  = p_d(x_d) / q_d(x_d)
+        A_d    = min(1, Abar_{d-1} * rho_d)           # nominal reach budget
+        Abar_d = min(w_{d-1}, A_d)                    # FEASIBLE budget (cap 'reach')
         if d < 3:
-            base(y) = min(1, A_d * rho_{d+1}(y))      # y over the d+1 draft support
-            lam_d   = solve_lambda:  sum_y q_{d+1}(y) * min(cap, base(y) + lam) = A_d
+            base(y) = min(1, Abar_d * rho_{d+1}(y))   # y over the d+1 draft support
+            lam_d   = solve_lambda:  sum_y q_{d+1}(y) * min(cap, base(y) + lam) = Abar_d
             w_d     = min(cap, base(x_{d+1}) + lam_d) # realised reach probability
         else:
-            w_d     = A_d
+            w_d     = Abar_d
         a_d = w_d / w_{d-1}                           # CONDITIONAL accept coin
-        if u_d <= a_d: c_d = A_d ; continue
-        emit sample(normalise((c_{d-1} * p_d - q_d)+))    # SCALED residual
+        if u_d <= a_d: continue
+        emit sample(normalise((Abar_{d-1} * p_d - w_{d-2} * q_d)+))   # deficit residual
         stop
     emit bonus ~ p_4
+
+The residual is the deficit the coins leave: given reach d-1 the draft at d
+is proposed with law ``q_d(y) w_{d-1}(y) / Abar_{d-1}`` and its expected reach
+is ``min(w_{d-2}, A_d(y))``, so the accepted mass is
+``min(q_d(y) w_{d-2} / Abar_{d-1}, p_d(y))`` and what is left is exactly
+``(p_d - q_d w_{d-2} / Abar_{d-1})+``.  ``tests/test_block_verify_exact_law.py``
+enumerates the emitted joint law against the target on tiny vocabularies; the
+2.11.1 form (raw ``A_d`` at the last depth, coin clipped at 1, residual
+``(A_{d-1} p_d - q_d)+``) fails that test at depth 3 by up to 4e-2 TV.
 
 ``lam_d`` is the water-filling level that keeps ``E_{x_{d+1}~q_{d+1}}[w_d]``
 exactly at the budget ``A_d`` -- which is what preserves exactness: the
@@ -365,12 +375,14 @@ def prepare_residual(
     draft_probs: np.ndarray,
     *,
     scale: np.float64 = ONE,
+    draft_scale: np.float64 = ONE,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Mirror ``_prepare_residual`` (kernel lines 165-197).
 
-    ``scale`` is the block law's reach credit ``c_{d-1}`` multiplying the target
-    term (H §3.2, "one scalar multiply on the target term").  ``scale = 1``
-    reproduces the kernel byte-for-byte.
+    ``scale`` is the block law's feasible reach credit ``Abar_{d-1}`` on the
+    target term and ``draft_scale`` the realised reach ``w_{d-2}`` on the draft
+    term (the deficit the accept coins leave, see ``decide_block``).
+    ``scale = draft_scale = 1`` reproduces the kernel byte-for-byte.
     """
 
     union_ids = np.union1d(target_ids, draft_ids).astype(np.uint32, copy=False)
@@ -378,7 +390,7 @@ def prepare_residual(
         [
             max(
                 np.float64(scale) * lookup(target_ids, target_probs, int(token))
-                - lookup(draft_ids, draft_probs, int(token)),
+                - np.float64(draft_scale) * lookup(draft_ids, draft_probs, int(token)),
                 ZERO,
             )
             for token in union_ids
@@ -639,15 +651,24 @@ def _finish_bonus(window: Window, out: Outcome) -> Outcome:
 
 
 def _emit_correction(
-    window: Window, out: Outcome, depth: int, credit: np.float64
+    window: Window,
+    out: Outcome,
+    depth: int,
+    credit: np.float64,
+    draft_scale: np.float64 = ONE,
 ) -> Outcome:
-    """Kernel lines 292-320, with H's ``c`` scaling on the target term."""
+    """Kernel lines 292-320, with the block law's scales on both terms."""
 
     out.first_reject = depth
     target_ids, target_double = window.target_double[depth]
     draft_ids, draft_probs = window.draft[depth]
     residual = prepare_residual(
-        target_ids, target_double, draft_ids, draft_probs, scale=credit
+        target_ids,
+        target_double,
+        draft_ids,
+        draft_probs,
+        scale=credit,
+        draft_scale=draft_scale,
     )
     correction_ids, correction_probs = (
         (target_ids, target_double) if residual is None else residual
@@ -787,6 +808,8 @@ def reach_ladder_block(window: Window, *, cap_mode: str = "reach") -> np.ndarray
         # sampling noise.  The recursion still advances on the REALISED reach,
         # because that is what actually caps the next depth.
         ladder[depth] = min(budget, reach)
+        if cap_mode == "reach":
+            budget = min(budget, reach)  # Abar_d: the feasible budget
         realised = _block_realised_reach(
             window, depth, budget=budget, reach=reach, cap_mode=cap_mode
         )
@@ -816,12 +839,16 @@ def block_ladder_columns(
         "budget": np.zeros(depth_count, dtype=np.float64),
         "realised": np.zeros(depth_count, dtype=np.float64),
         "clipped": np.zeros(depth_count, dtype=np.uint8),
+        "draft_scale": np.ones(depth_count, dtype=np.float64),
     }
     credit = ONE
     reach = ONE
+    reach_prev = ONE
     for depth in range(depth_count):
         rho = window.rho(depth, window.draft_tokens[depth])
         budget = min(ONE, credit * rho)
+        if cap_mode == "reach":
+            budget = min(reach, budget)  # Abar_d: the feasible budget
         realised = _block_realised_reach(
             window, depth, budget=budget, reach=reach, cap_mode=cap_mode
         )
@@ -830,10 +857,12 @@ def block_ladder_columns(
             columns["clipped"][depth] = 1
             coin = ONE
         columns["scale"][depth] = credit
+        columns["draft_scale"][depth] = reach_prev
         columns["coin"][depth] = coin
         columns["budget"][depth] = budget
         columns["realised"][depth] = realised
         credit = budget
+        reach_prev = reach
         reach = realised if realised < reach else reach
     return columns
 
@@ -885,12 +914,19 @@ def decide_block(window: Window, *, cap_mode: str = "reach") -> Outcome:
     if cap_mode not in {"reach", "one"}:
         raise ValueError("cap_mode must be 'reach' or 'one'")
     out = Outcome(window.depth)
-    credit = ONE  # c_{d-1}: the reach budget entering this depth
+    credit = ONE  # Abar_{d-1}: the feasible reach budget entering this depth
     reach = ONE  # w_{d-1}: the probability this depth was reached at all
+    reach_prev = ONE  # w_{d-2}: the cap of the previous depth's water-fill
     for depth in range(window.depth):
         token = window.draft_tokens[depth]
         rho = window.rho(depth, token)
         budget = min(ONE, credit * rho)  # A_d
+        if cap_mode == "reach":
+            # Abar_d: only realisations that reach depth d can spend the
+            # budget.  Without this cap the last depth's coin exceeds 1
+            # whenever an earlier cap bound and the law stops being exact
+            # (the depth-3 failure of 2026-09-07).
+            budget = min(reach, budget)
         # The c = 1 identity (H §3.2).  With credit = reach = 1 the final
         # depth's coin is exactly min(1, rho) and the residual scale is 1, so
         # it always agrees; an earlier depth agrees only when its budget is
@@ -915,9 +951,10 @@ def decide_block(window: Window, *, cap_mode: str = "reach") -> Outcome:
                 out.draws_used = depth + 1
                 return out
             credit = budget
+            reach_prev = reach
             reach = realised if realised < reach else reach
             continue
-        return _emit_correction(window, out, depth, credit)
+        return _emit_correction(window, out, depth, credit, reach_prev)
     return _finish_bonus(window, out)
 
 

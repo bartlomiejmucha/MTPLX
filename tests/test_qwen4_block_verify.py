@@ -423,6 +423,9 @@ def test_the_ladder_is_bit_identical_to_the_reference_ladder():
     np.testing.assert_array_equal(verifier.budget, columns["budget"])
     np.testing.assert_array_equal(verifier.realised, columns["realised"])
     np.testing.assert_array_equal(verifier.clipped, columns["clipped"])
+    np.testing.assert_array_equal(
+        verifier.residual_draft_scale, columns["draft_scale"]
+    )
 
 
 def test_the_ladder_actually_leaves_one_and_buys_reach():
@@ -460,6 +463,7 @@ def test_the_correction_is_the_scaled_residual_the_reference_builds(depth):
         draft_ids,
         draft_probs,
         scale=np.float64(verifier.residual_scale[depth]),
+        draft_scale=np.float64(verifier.residual_draft_scale[depth]),
     )
     if expected is None:
         # The reference falls back to the double-normalised target row when

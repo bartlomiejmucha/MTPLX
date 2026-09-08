@@ -29,45 +29,53 @@ on 381 real windows: **+1.85% tokens/window (2.487 -> 2.533)**.
 The law, exactly as implemented
 -------------------------------
 ``tests/block_verify_reference.py`` is the float64 reference and
-this module is its in-loop mirror -- same arithmetic, same tie ownership, same
-``reach`` cap.  Per window, with ``c_0 = w_0 = 1``::
+this module is its in-loop mirror -- same arithmetic, same tie ownership.
+Per window, with ``Abar_0 = 1`` and ``w_{-1} = w_0 = 1``::
 
     for d in 1..D:
-        rho_d = p_d(x_d) / q_d(x_d)                    # 0 when the target
+        rho_d  = p_d(x_d) / q_d(x_d)                   # 0 when the target
                                                        # zeroed the drafted token
-        A_d   = min(1, c_{d-1} * rho_d)                # reach BUDGET
+        A_d    = min(1, Abar_{d-1} * rho_d)            # nominal reach budget
+        Abar_d = min(w_{d-1}, A_d)                     # FEASIBLE budget: only
+                                                       # realisations that reach
+                                                       # depth d can spend it
         if d < D:
-            base(y) = min(1, A_d * rho_{d+1}(y))       # y over draft row d+1
+            base(y) = min(1, Abar_d * rho_{d+1}(y))    # y over draft row d+1
             lam_d   = water-fill level s.t.
-                      sum_y q_{d+1}(y) * min(w_{d-1}, base(y) + lam_d) = A_d
+                      sum_y q_{d+1}(y) * min(w_{d-1}, base(y) + lam_d) = Abar_d
             w_d     = min(w_{d-1}, base(x_{d+1}) + lam_d)   # REALISED reach
         else:
-            w_d     = A_d
-        a_d = w_d / w_{d-1}                            # CONDITIONAL accept coin
-        if u_d <= a_d:  c_d = A_d ; w_d stays ; continue
-        emit sample(normalise((c_{d-1} * p_d - q_d)+))  # SCALED residual
+            w_d     = Abar_d
+        a_d = w_d / w_{d-1}                            # CONDITIONAL accept coin,
+                                                       # a probability by construction
+        if u_d <= a_d:  continue
+        emit sample(normalise((Abar_{d-1} * p_d - w_{d-2} * q_d)+))  # residual
         stop
     emit bonus ~ p_{D+1}                               # unchanged
 
-``lam_d`` is the water-filling level that holds
-``E_{x_{d+1} ~ q_{d+1}}[w_d]`` at the budget ``A_d``, which is what preserves
-exactness: averaged over the next drafted token the position-``d`` accept
-probability is still ``min(1, rho_d)``, so ``q_d(y) P(accept | x_d = y) <=
-p_d(y)`` holds pointwise and the residual stays non-negative.
+Why this is exact (a two-line proof the enumeration test pins).  Given the
+window reached depth ``d-1``, the draft at depth ``d`` arrives with the
+reweighted law ``q_d(y) w_{d-1}(y) / Abar_{d-1}`` (the look-ahead at depth
+``d-1`` spent its budget unevenly over ``y``), and the expected reach at depth
+``d`` for draft ``y`` is ``E_{x_{d+1}}[w_d] = min(w_{d-2}, A_d(y))``.  So the
+accepted mass at ``y`` is ``min(q_d(y) w_{d-2} / Abar_{d-1}, p_d(y)) <= p_d(y)``
+pointwise and the residual is exactly the deficit
+``(p_d(y) - q_d(y) w_{d-2} / Abar_{d-1})+``.  Both use only quantities the
+ladder already carries.
 
-**The cap is ``w_{d-1}``, not H's literal ``min(1, .)``.**  H's pseudo-code
-lets ``w_d`` exceed ``w_{d-1}``, and then ``a_d = w_d / w_{d-1} > 1`` is not a
-probability.  Capping the water-fill at ``w_{d-1}`` is the smallest change that
-makes the law well defined; it is still budget-exact (feasible because
-``w_{d-1} >= A_d``) and the coin is always a probability.  The reference calls
-this ``--cap reach`` and it is its default; :data:`CAP_MODE` pins the in-loop
-lane to it.
+The previous form of this law (2.11.1, off in production because the flag
+was frozen at import before the server stamped it) took the raw ``A_d`` as the
+budget at the last depth, clipped the resulting ``a_d > 1`` coin to 1, and used
+``(A_{d-1} p_d - q_d)+`` as the residual.  Enumerated against the target law on
+tiny vocabularies that is exact at depths 1 and 2 and off by up to 4e-2 total
+variation at depth 3 (``tests/test_block_verify_exact_law.py``); the two
+missing factors above are the whole difference.
 
 **The c = 1 identity.**  When the ladder never drops below 1 the two laws
 coincide token for token: ``a_d`` collapses to ``min(1, rho_d)`` and the
-residual scale to 1.  That holds on 43-47% of windows (H §1.2), and it is the
-partial parity check a staged rollout gets for free -- the offline scorer fails
-if it ever stops holding.
+residual to ``(p_d - q_d)+``.  That holds on 43-47% of windows (H §1.2), and it
+is the partial parity check a staged rollout gets for free -- the offline
+scorer fails if it ever stops holding.
 
 Draw accounting -- unchanged
 ----------------------------
@@ -290,6 +298,7 @@ class BlockVerifier:
         "rho",
         "accept_probability",
         "residual_scale",
+        "residual_draft_scale",
         "budget",
         "realised",
         "clipped",
@@ -320,6 +329,7 @@ class BlockVerifier:
         self.rho = [ZERO] * self.depth
         self.accept_probability = [0.0] * self.depth
         self.residual_scale = [1.0] * self.depth
+        self.residual_draft_scale = [1.0] * self.depth
         self.budget = [0.0] * self.depth
         self.realised = [0.0] * self.depth
         self.clipped = [0] * self.depth
@@ -366,46 +376,77 @@ class BlockVerifier:
         return min(cap, base[int(hits[0])] + level) if hits.size else min(cap, level)
 
     def _build(self) -> None:
-        credit = ONE  # c_{d-1}: the reach budget entering this depth
-        reach = ONE  # w_{d-1}: the probability this depth is reached at all
+        # Ladder state (see the module docstring, "The law, exactly as
+        # implemented"):
+        #   credit     = Abar_{d-1}: the FEASIBLE expected reach entering this
+        #                depth (the water-fill target of the previous depth)
+        #   reach      = w_{d-1}:    the realised reach into this depth for the
+        #                actual drafted path
+        #   reach_prev = w_{d-2}:    the realised reach into the previous depth
+        #                (the cap of the previous depth's water-fill), which is
+        #                the draft-side scale of this depth's residual
+        credit = ONE
+        reach = ONE
+        reach_prev = ONE
         for depth in range(self.depth):
             rho = self._rho(depth, self.draft_tokens[depth])
-            budget = min(ONE, credit * rho)
+            nominal = min(ONE, credit * rho)  # A_d(x_d)
+            # The budget can only be spent on realisations that actually
+            # reach this depth: Abar_d = min(w_{d-1}, A_d).  Without this cap
+            # the last depth's coin A_d / w_{d-1} exceeds 1 whenever an
+            # earlier cap bound, and clipping it to 1 silently over-accepts
+            # (the depth-3 exactness failure found 2026-09-07).
+            budget = min(reach, nominal)
             realised = self._realised_reach(depth, budget=budget, reach=reach)
             # reach == 0 is a measure-zero branch (it needs an earlier realised
             # reach of exactly 0 AND a uniform of exactly 0.0, which the `<=`
             # tie ownership does accept); the conditional is arbitrary there.
             coin = ONE if reach <= ZERO else np.float64(realised / reach)
             if coin > ONE:
+                # Unreachable by construction (realised <= reach); kept as a
+                # float64 guard so a rounding excursion is a probability.
                 self.clipped[depth] = 1
                 coin = ONE
             self.rho[depth] = rho
             self.residual_scale[depth] = float(credit)
+            self.residual_draft_scale[depth] = float(reach_prev)
             self.accept_probability[depth] = float(coin)
             self.budget[depth] = float(budget)
             self.realised[depth] = float(realised)
             credit = budget
+            reach_prev = reach
             reach = realised if realised < reach else reach
 
     # -- what the accept loop reads ----------------------------------
     def scaled_residual(self, depth: int) -> SparseDistribution:
-        """``normalise((c_{d-1} p_d - q_d)+)`` -- the block law's correction.
+        """``normalise((Abar_{d-1} p_d - w_{d-2} q_d)+)`` -- the block law's correction.
 
-        Mirrors the reference's ``prepare_residual(scale=credit)``, which is
-        ``sampling.residual_distribution`` with one scalar multiply on the
-        target term: union both supports, ``max(c p - q, 0)``, drop the
-        non-positive entries, normalise twice (once here and once inside
-        ``SparseDistribution``, exactly as the shipped path does).  When
-        nothing survives, fall back to the double-normalised target row.
+        The deficit the accept coins leave at position ``d``.  Given the window
+        reached depth ``d-1``, the draft at depth ``d`` is proposed with the
+        reweighted law ``q_d(y) w_{d-1}(y) / Abar_{d-1}`` and accepted with the
+        expected reach ``min(w_{d-2}, A_d(y))`` (the look-ahead water-fill at
+        depth ``d-1`` was capped at ``w_{d-2}``), so the accepted mass at ``y``
+        is ``min(q_d(y) w_{d-2} / Abar_{d-1}, p_d(y))`` and the deficit is
+        ``(p_d(y) - q_d(y) w_{d-2} / Abar_{d-1})+``.  Depth 1 has
+        ``w_{-1} = Abar_0 = 1`` and reduces to the shipped ``(p - q)+``.
+
+        Mirrors the reference's ``prepare_residual(scale, draft_scale)``: union
+        both supports, ``max(c p - w q, 0)``, drop the non-positive entries,
+        normalise twice (once here and once inside ``SparseDistribution``,
+        exactly as the shipped path does).  When nothing survives -- only
+        reachable through float64 rounding, since the deficit is positive
+        whenever a rejection has positive probability -- fall back to the
+        double-normalised target row.
         """
 
         target_ids, target_probs = self.target_double[depth]
         draft_ids, draft_probs = self.draft[depth]
         scale = np.float64(self.residual_scale[depth])
+        draft_scale = np.float64(self.residual_draft_scale[depth])
         union_ids = np.union1d(target_ids, draft_ids).astype(np.int64, copy=False)
         residual = np.maximum(
             scale * lookup_many(target_ids, target_probs, union_ids)
-            - lookup_many(draft_ids, draft_probs, union_ids),
+            - draft_scale * lookup_many(draft_ids, draft_probs, union_ids),
             ZERO,
         )
         residual = np.where(np.isfinite(residual) & (residual > ZERO), residual, ZERO)
@@ -424,6 +465,7 @@ class BlockVerifier:
         return {
             "coin": [float(value) for value in self.accept_probability],
             "scale": [float(value) for value in self.residual_scale],
+            "draft_scale": [float(value) for value in self.residual_draft_scale],
             "budget": [float(value) for value in self.budget],
             "realised": [float(value) for value in self.realised],
             "clipped": [int(value) for value in self.clipped],
