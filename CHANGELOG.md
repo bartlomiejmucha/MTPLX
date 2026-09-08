@@ -61,6 +61,14 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
+- **Copied blocks at the verify cache's growth edge kept their rows.** On
+  the 27B family the context-copy lane verified a copied block through the
+  fixed-capacity buffers of the compiled verify; a block that straddled a
+  512-token growth grant was written with a functional slice update that
+  silently drops the rows past the end, so the rest of the turn attended
+  over missing rows (an answer cut off mid-statement was the visible
+  symptom). The copy-block route grows the buffers before its forward and
+  the write grows them as a last guard.
 - **Flight recorder counts non-streaming requests.** A non-streaming
   chat completion fed the recorder no token events, so `mtplx trace`
   showed a 24k-token generation as a prefill with zero tokens for its
