@@ -1274,6 +1274,160 @@ def _repair_included_chat_template(tokenizer: Any, model_path: Path) -> None:
     tokenizer.chat_template = replacement
 
 
+# The pre-tokenizer regex every Qwen3-generation tokenizer.json ships (Qwen3.5,
+# 3.6, 3.8 and Flash-Next): letters and their combining marks stay in one word,
+# ``[\p{L}\p{M}]+``. transformers' ``Qwen2Tokenizer`` rebuilds the fast
+# backend from its own Qwen2-era regex (``\p{L}+``) and ignores the file, so
+# through AutoTokenizer a Devanagari, Thai or vowelled Arabic word is split at
+# every mark: Hindi 32 tokens instead of 20, Thai 17 instead of 9, Arabic 45
+# instead of 31 on the same sentence (measured on the shipped app runtime,
+# transformers 5.14.1, 2026-09-08). Latin, CJK and code are identical. The
+# model was trained on the file's regex, so the loader restores it.
+_QWEN3_PRETOKENIZER_SPLIT = (
+    "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}|"
+    " ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
+)
+_LEGACY_QWEN2_PRETOKENIZER_SPLIT = (
+    "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}|"
+    " ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
+)
+_QWEN3_PRETOKENIZER_FAMILY_PREFIXES = ("qwen3_5", "qwen3_next", "qwen4")
+
+
+def _pretokenizer_split_pattern(pre_tokenizer: Any) -> str | None:
+    """The Split regex inside a serialized ``tokenizers`` pre-tokenizer."""
+
+    if isinstance(pre_tokenizer, dict):
+        pattern = pre_tokenizer.get("pattern")
+        if isinstance(pattern, dict) and isinstance(pattern.get("Regex"), str):
+            return str(pattern["Regex"])
+        for value in pre_tokenizer.values():
+            found = _pretokenizer_split_pattern(value)
+            if found is not None:
+                return found
+    elif isinstance(pre_tokenizer, list):
+        for value in pre_tokenizer:
+            found = _pretokenizer_split_pattern(value)
+            if found is not None:
+                return found
+    return None
+
+
+def _pretokenizer_byte_level(pre_tokenizer: Any) -> dict[str, Any]:
+    """The ByteLevel settings inside a serialized pre-tokenizer (or defaults)."""
+
+    if isinstance(pre_tokenizer, dict):
+        if pre_tokenizer.get("type") == "ByteLevel":
+            return {
+                "add_prefix_space": bool(pre_tokenizer.get("add_prefix_space", False)),
+                "trim_offsets": bool(pre_tokenizer.get("trim_offsets", False)),
+                "use_regex": bool(pre_tokenizer.get("use_regex", False)),
+            }
+        for value in pre_tokenizer.values():
+            found = _pretokenizer_byte_level(value)
+            if found:
+                return found
+    elif isinstance(pre_tokenizer, list):
+        for value in pre_tokenizer:
+            found = _pretokenizer_byte_level(value)
+            if found:
+                return found
+    return {}
+
+
+def _fast_tokenizer_backend(tokenizer: Any) -> Any | None:
+    """The ``tokenizers.Tokenizer`` under an mlx-lm wrapper / HF fast tokenizer."""
+
+    for candidate in (tokenizer, getattr(tokenizer, "_tokenizer", None)):
+        if candidate is None:
+            continue
+        backend = getattr(candidate, "backend_tokenizer", None)
+        if backend is None:
+            inner = getattr(candidate, "_tokenizer", None)
+            if inner is not None and hasattr(inner, "pre_tokenizer"):
+                backend = inner
+        if backend is not None and hasattr(backend, "pre_tokenizer"):
+            return backend
+    return None
+
+
+def _model_family_for_tokenizer(config: dict[str, Any] | None) -> str:
+    config = config or {}
+    model_type = str(config.get("model_type") or "")
+    if not model_type:
+        model_type = str((config.get("text_config") or {}).get("model_type") or "")
+    return model_type
+
+
+def restore_qwen3_pretokenizer(
+    tokenizer: Any, model_path: Path, config: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Make the loaded fast tokenizer split words the way the model was trained.
+
+    Two repairs, both only when they apply:
+    * the loaded backend's Split regex differs from the pack's tokenizer.json
+      (transformers rebuilt it from its class's own regex): install the file's;
+    * the file itself carries the Qwen2-era regex on a Qwen3-generation
+      family (the 27B packs were re-saved through ``Qwen2Tokenizer`` and
+      shipped that way): install the canonical Qwen3 regex.
+    Returns a receipt when something changed, else None. Never raises.
+    """
+
+    try:
+        backend = _fast_tokenizer_backend(tokenizer)
+        if backend is None:
+            return None
+        tokenizer_json = Path(model_path) / "tokenizer.json"
+        if not tokenizer_json.exists():
+            return None
+        file_pre = json.loads(tokenizer_json.read_text(encoding="utf-8")).get("pre_tokenizer")
+        file_pattern = _pretokenizer_split_pattern(file_pre)
+        if file_pattern is None:
+            return None
+        loaded_pattern = _pretokenizer_split_pattern(
+            json.loads(bytes(backend.pre_tokenizer.__getstate__()).decode("utf-8"))
+        )
+        family = _model_family_for_tokenizer(config)
+        wanted = file_pattern
+        reason = "tokenizer.json"
+        if file_pattern == _LEGACY_QWEN2_PRETOKENIZER_SPLIT and family.startswith(
+            _QWEN3_PRETOKENIZER_FAMILY_PREFIXES
+        ):
+            wanted = _QWEN3_PRETOKENIZER_SPLIT
+            reason = f"{family} family (tokenizer.json carries the Qwen2 regex)"
+        if loaded_pattern == wanted:
+            return None
+        from tokenizers import Regex, pre_tokenizers
+
+        byte_level = _pretokenizer_byte_level(file_pre)
+        backend.pre_tokenizer = pre_tokenizers.Sequence(
+            [
+                pre_tokenizers.Split(Regex(wanted), behavior="isolated", invert=False),
+                pre_tokenizers.ByteLevel(
+                    add_prefix_space=byte_level.get("add_prefix_space", False),
+                    trim_offsets=byte_level.get("trim_offsets", False),
+                    use_regex=byte_level.get("use_regex", False),
+                ),
+            ]
+        )
+        receipt = {
+            "source": reason,
+            "combining_marks_kept": "\\p{M}" in wanted,
+            "was": "qwen2" if loaded_pattern == _LEGACY_QWEN2_PRETOKENIZER_SPLIT else "other",
+        }
+        logger.warning(
+            "[tokenizer] restored the pre-tokenizer regex from %s: the loaded "
+            "tokenizer split combining marks off their letters (Devanagari, "
+            "Thai, vowelled Arabic tokenized 25-90%% longer than the model was "
+            "trained on)",
+            reason,
+        )
+        return receipt
+    except Exception as exc:  # noqa: BLE001 - a repair must never block a load
+        logger.warning("[tokenizer] pre-tokenizer repair skipped: %s", exc)
+        return None
+
+
 def _load_tokenizer_resilient(model_path: Path, config: dict[str, Any]) -> Any:
     from mlx_lm.utils import load_tokenizer
 
@@ -1286,6 +1440,7 @@ def _load_tokenizer_resilient(model_path: Path, config: dict[str, Any]) -> Any:
         )
     else:
         _repair_included_chat_template(tokenizer, model_path)
+        restore_qwen3_pretokenizer(tokenizer, model_path, config)
         return tokenizer
 
     from mlx_lm.tokenizer_utils import TokenizerWrapper
@@ -1322,11 +1477,13 @@ def _load_tokenizer_resilient(model_path: Path, config: dict[str, Any]) -> Any:
         eos_ids = list(eos)
     else:
         eos_ids = None
-    return TokenizerWrapper(
+    wrapped = TokenizerWrapper(
         hf_tokenizer,
         eos_token_ids=eos_ids,
         chat_template=None,
     )
+    restore_qwen3_pretokenizer(wrapped, model_path, config)
+    return wrapped
 
 
 def _mtp_alias_load_path(path: Path, config: dict[str, Any] | None) -> Path:
