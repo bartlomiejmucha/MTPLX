@@ -31261,6 +31261,11 @@ def create_app(state: ServerState) -> FastAPI:
         def _nonstream_on_tokens(new_tokens: list[int]) -> None:
             nonlocal nonstream_completion_tokens
             nonstream_completion_tokens += len(new_tokens)
+            # The flight recorder learned about tokens only from the SSE
+            # drain loop, so a non-streaming request decoding 24,000 tokens
+            # showed as "prefill, 0 tokens, 0 tok/s" on /v1/mtplx/flight and
+            # the dashboard for its whole life. Same hook, same clock.
+            _flight(state).on_tokens(response_id, len(new_tokens), time.perf_counter())
             cancel_message = (
                 "client disconnected"
                 if nonstream_client_disconnected
