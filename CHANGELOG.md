@@ -45,6 +45,24 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
+- **261,120-token prompts decode on Flash-Next** (PR #482, davidtai). At
+  the pack's full context the first speculative verify step ran out of GPU
+  memory after the whole prompt had been read: the verify's KV-cache update
+  reallocated the entire cache buffer on every step (about 6.4 GB across the
+  twelve full-attention layers at that context), and its multi-row
+  attention built a score table that grows with the context. The KV update
+  now writes its rows into the existing buffer (exact; the compiled verify
+  path and the rollback are unchanged), and the verify attention is split
+  across query-head groups so each call stays on the fused kernel in the
+  three-to-eight-row band the verify uses (exact per group;
+  `MTPLX_QWEN4_VERIFY_SDPA_HEAD_CHUNK=0` turns it off; `/health` reports
+  `verify_sdpa_head_chunk` when it engages). Speed and peak memory at 16k
+  are unchanged; the 27B models are not affected.
+- **The Flash-Next converter accepts the official FP8 checkpoint** (PR
+  #474, Graham Jenkins). Qwen's Flash-Next-FP8 revision stores one shared
+  scalar scale for its 128 n-gram embedding shards instead of per-block
+  scales; the converter now falls back to that scalar for n-gram shards and
+  accounts for it, with regression tests for both layouts.
 - **Flash-Next block verification is exact at every depth.** Three
   independent audits enumerated the block-verify accept law on tiny
   vocabularies and found it exact at depths 1 and 2 but off by up to 4e-2
