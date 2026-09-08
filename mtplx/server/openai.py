@@ -13651,14 +13651,19 @@ def _maybe_canonicalize_committed_reasoning(
 
     if not _committed_reasoning_canonicalization_enabled():
         return None
+    # With thinking off there is no reasoning to put back, but the model's
+    # own token seams still exist (a length-cut turn, a non-canonical BPE
+    # split inside a code line), so the token splice must still run; only
+    # the reasoning substitution stands aside.
+    splice_only_reason: str | None = None
     if not thinking_enabled:
-        _declined("thinking_disabled")
-        return None
-    if getattr(state.args, "strip_assistant_reasoning_history", False):
-        _declined("reasoning_history_stripped")
-        return None
-    if _reasoning_history_scoped_active(state):
-        _declined("reasoning_history_scoped")
+        splice_only_reason = "thinking_disabled"
+    elif getattr(state.args, "strip_assistant_reasoning_history", False):
+        splice_only_reason = "reasoning_history_stripped"
+    elif _reasoning_history_scoped_active(state):
+        splice_only_reason = "reasoning_history_scoped"
+    if splice_only_reason is not None and not _committed_token_splice_enabled():
+        _declined(splice_only_reason)
         return None
     # Prologue scrub (audit F11 P2): a client-planted committed-reasoning
     # field must never survive into any later encode, including when this
@@ -13702,6 +13707,15 @@ def _maybe_canonicalize_committed_reasoning(
     def _record(target: dict[str, Any] | None) -> None:
         if target is not None:
             target["committed_reasoning_canonicalization"] = outcome
+
+    if splice_only_reason is not None:
+        outcome["declined"] = splice_only_reason
+        spliced = _splice_prompt_onto_committed(
+            state, messages, prompt_ids, committed, cp_raw, outcome
+        )
+        _record(template_observability)
+        _record(request_observability)
+        return spliced
 
     dropped_assistant_turns = _transcript_dropped_assistant_turns(transcript_stats)
     if dropped_assistant_turns > 0:

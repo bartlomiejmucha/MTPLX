@@ -144,6 +144,74 @@ def test_gate_serves_spliced_ids_for_a_plain_turn(monkeypatch):
     assert outcome["cp_spliced"] == len(committed)
 
 
+def test_gate_splices_with_thinking_off(monkeypatch):
+    """A reasoning-off daemon has no think interior to put back, but the
+    model's own seams still exist (a length-cut turn, a non-canonical split
+    in a code line); the splice runs and the receipt names the declined
+    substitution."""
+    committed = list(range(100, 200))
+    text = (
+        "<|im_start|>user\nhi<|im_end|>\n"
+        "<|im_start|>assistant\nplain answer<|im_end|>\n"
+    )
+    vocab = {110: "AB", 901: "A", 902: "B"}
+    state = _gate_state(committed, text, vocab)
+    monkeypatch.setattr(oa, "_reasoning_history_scoped_active", lambda state: False)
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "plain answer"},
+        {"role": "user", "content": "next"},
+    ]
+    request = oa.ChatCompletionRequest(model="m", messages=messages)
+    prompt_ids = committed[:10] + [901, 902] + committed[11:]
+    observability: dict = {}
+    result = oa._maybe_canonicalize_committed_reasoning(
+        state,
+        messages=request.messages,
+        prompt_ids=prompt_ids,
+        headers={},
+        metadata={},
+        request=request,
+        thinking_enabled=False,
+        reasoning_effort=None,
+        tools=None,
+        tool_choice=None,
+        tool_prompt_mode="hybrid",
+        template_observability={},
+        request_observability=observability,
+    )
+    assert result is not None
+    _messages, served = result
+    assert served == committed
+    outcome = observability["committed_reasoning_canonicalization"]
+    assert outcome["declined"] == "thinking_disabled"
+    assert outcome["applied"] is True
+    assert outcome["token_splice"]["spans"] == 1
+    # switched off, the gate declines exactly as before
+    monkeypatch.setenv("MTPLX_COMMITTED_TOKEN_SPLICE", "0")
+    observability2: dict = {}
+    result2 = oa._maybe_canonicalize_committed_reasoning(
+        state,
+        messages=request.messages,
+        prompt_ids=prompt_ids,
+        headers={},
+        metadata={},
+        request=request,
+        thinking_enabled=False,
+        reasoning_effort=None,
+        tools=None,
+        tool_choice=None,
+        tool_prompt_mode="hybrid",
+        template_observability={},
+        request_observability=observability2,
+    )
+    assert result2 is None
+    assert observability2["committed_reasoning_canonicalization"] == {
+        "applied": False,
+        "declined": "thinking_disabled",
+    }
+
+
 def test_gate_splice_can_be_switched_off(monkeypatch):
     monkeypatch.setenv("MTPLX_COMMITTED_TOKEN_SPLICE", "0")
     committed = list(range(100, 200))
