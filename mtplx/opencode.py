@@ -33,6 +33,26 @@ OPENCODE_DEFAULT_CHUNK_TIMEOUT_MS = 900_000
 # all showing request_max_tokens=32000. The earlier 32_768 guess never
 # matched the wire, so the guard silently stripped nothing.
 OPENCODE_INJECTED_OUTPUT_CAP = 32_000
+
+
+def opencode_output_limit(context_window: int, requested: int | None = None) -> int:
+    """The reply budget OpenCode may plan around, never the whole window.
+
+    OpenCode 1.18.29 keeps ``min(limit.output, 32_000)`` of ``limit.context``
+    for the reply and compacts the moment a turn's total tokens reach the
+    rest (session/overflow.ts ``usable`` / ``isOverflow``). Mirroring the
+    context into ``limit.output`` therefore left a zero-token conversation
+    window on any context <= 32K (8,192 on a 32 GB seat), and the compaction
+    agent ran after every reply (issue #480: 48 summaries in 98 turns, no
+    turn past 7,801 tokens). Reserve at most half the window, capped at the
+    32,000 OpenCode injects on large windows (which the session-headers
+    plugin strips, so the server's own defaults still apply there).
+    """
+    context = max(1, int(context_window))
+    cap = max(1, min(OPENCODE_INJECTED_OUTPUT_CAP, context // 2))
+    if requested is not None and int(requested) > 0:
+        return max(1, min(int(requested), cap))
+    return cap
 # OpenCode <= 1.18.20 (including Desktop 1.18.18) injects a qwen-keyed
 # sampler for any model id containing "qwen" (provider/transform.ts
 # `temperature()`/`topP()` at v1.18.18); 1.18.21 removed the rule. The plugin
@@ -296,7 +316,7 @@ def build_opencode_provider_config(
     """
 
     context = int(context_window or OPENCODE_DEFAULT_CONTEXT_WINDOW)
-    output = int(output_limit if output_limit is not None else context)
+    output = opencode_output_limit(context, output_limit)
     _ = (temperature, top_p, top_k)
     options: dict[str, Any] = {
         "baseURL": str(base_url).rstrip("/"),
@@ -820,7 +840,7 @@ def write_opencode_config(
         "model_id": model_id,
         "model_ref": opencode_model_ref(model_id, provider_id=provider_id),
         "context_window": int(context_window),
-        "output_limit": int(output_limit if output_limit is not None else context_window),
+        "output_limit": opencode_output_limit(context_window, output_limit),
         "chunk_timeout_ms": int(chunk_timeout_ms),
         "reasoning_field": "reasoning_content",
         "reasoning_effort": reasoning_effort,

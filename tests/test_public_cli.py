@@ -2455,7 +2455,9 @@ def test_laguna_opencode_payload_uses_native_tools_and_32k_context(monkeypatch):
     assert args.chat_template_profile == "tokenizer"
     assert public._inspection_context_window(inspection, args=args) == 32_768
     assert payload["context_window"] == 32_768
-    assert payload["output_limit"] == 32_768
+    # Half the window: OpenCode reserves the output limit out of the context
+    # before deciding whether the conversation still fits (issue #480).
+    assert payload["output_limit"] == 16_384
     assert payload["tool_prompt_mode"] == "native"
     assert "--tool-prompt-mode native" in payload["server_command"]
     assert "--context-window 32768" in payload["server_command"]
@@ -2464,7 +2466,8 @@ def test_laguna_opencode_payload_uses_native_tools_and_32k_context(monkeypatch):
     expanded = public._quickstart_opencode_payload(args, inspection=inspection)
 
     assert expanded["context_window"] == 65_536
-    assert expanded["output_limit"] == 32_768
+    # Capped at the 32,000 OpenCode injects on large windows.
+    assert expanded["output_limit"] == 32_000
     assert "--context-window 65536" in expanded["server_command"]
     assert "--max-response-tokens 32768" in expanded["server_command"]
 

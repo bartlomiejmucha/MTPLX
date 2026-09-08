@@ -12459,6 +12459,7 @@ def _quickstart_opencode_payload(
         detect_opencode_desktop,
         opencode_config_path,
         opencode_model_ref,
+        opencode_output_limit,
         write_opencode_config,
     )
 
@@ -12497,10 +12498,7 @@ def _quickstart_opencode_payload(
         or OPENCODE_CHAT_TEMPLATE_PROFILE_DEFAULT
     )
     opencode_max_response_tokens = getattr(args, "max_response_tokens", None)
-    output_limit = min(
-        context_window,
-        int(opencode_max_response_tokens or context_window),
-    )
+    output_limit = opencode_output_limit(context_window, opencode_max_response_tokens)
     max_response_suffix = (
         f"--max-response-tokens {int(opencode_max_response_tokens)} "
         if opencode_max_response_tokens is not None

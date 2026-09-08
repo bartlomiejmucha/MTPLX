@@ -4010,6 +4010,16 @@ final class MTPLXAppCoreTests: XCTestCase {
         )
     }
 
+    func testOpenCodeOutputLimitReservesHalfTheWindow() {
+        // Issue #480: OpenCode reserves the output limit out of the context
+        // before deciding whether the conversation still fits; equal numbers
+        // left a zero-token window on small seats.
+        XCTAssertEqual(OpenCodeIntegration.outputLimit(forContextWindow: 8_192), 4_096)
+        XCTAssertEqual(OpenCodeIntegration.outputLimit(forContextWindow: 32_768), 16_384)
+        XCTAssertEqual(OpenCodeIntegration.outputLimit(forContextWindow: 262_144), 32_000)
+        XCTAssertEqual(OpenCodeIntegration.outputLimit(forContextWindow: 1), 1)
+    }
+
     func testOfficialModelCatalogIncludesOptimizedQualityFP16() throws {
         let quality = try XCTUnwrap(
             MTPLXModelOption.option(matching: "mtplx-qwen36-27b-optimized-quality-fp16")

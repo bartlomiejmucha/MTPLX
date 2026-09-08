@@ -896,6 +896,15 @@ public struct OpenCodeIntegration: Sendable {
         return variants
     }
 
+    /// OpenCode plans `min(limit.output, 32_000)` of the window for the reply
+    /// and compacts once a turn's total tokens reach the rest (overflow.ts,
+    /// 1.18.29). Mirroring the context into the output limit left a zero-token
+    /// conversation window on small seats, so every reply was summarised
+    /// (issue #480). Half the window, capped at the 32,000 OpenCode injects.
+    static func outputLimit(forContextWindow context: Int) -> Int {
+        min(32_000, max(1, context / 2))
+    }
+
     private static func providerConfig(
         modelID: String,
         baseURL: String,
@@ -933,7 +942,7 @@ public struct OpenCodeIntegration: Sendable {
             "temperature": .bool(true),
             "limit": .object([
                 "context": .number(Double(contextLimit)),
-                "output": .number(Double(contextLimit)),
+                "output": .number(Double(Self.outputLimit(forContextWindow: contextLimit))),
             ]),
             "modalities": .object([
                 "input": .array(vision ? [.string("text"), .string("image")] : [.string("text")]),

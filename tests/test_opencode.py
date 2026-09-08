@@ -61,7 +61,7 @@ def test_build_opencode_config_keeps_sampler_policy_server_side():
     assert model["reasoning"] is True
     assert model["tool_call"] is True
     assert model["temperature"] is True
-    assert model["limit"] == {"context": 262144, "output": 262144}
+    assert model["limit"] == {"context": 262144, "output": 32000}
     assert "interleaved" not in model
     assert "options" not in model
     assert "variants" not in model
@@ -581,3 +581,32 @@ def test_repair_opencode_desktop_state_prunes_missing_workspace(tmp_path, monkey
     assert "mtplx-opencode-desktop-qa" not in repaired["layout.page"]
     assert "mtplx-opencode-desktop-qa" not in repaired["server"]
     assert str(present) in repaired["layout.page"]
+
+
+def test_opencode_output_limit_keeps_half_the_window():
+    """Issue #480: OpenCode reserves the output limit out of the context before
+    deciding whether the conversation still fits; equal numbers left nothing."""
+    from mtplx.opencode import opencode_output_limit
+
+    assert opencode_output_limit(262_144) == 32_000
+    assert opencode_output_limit(57_344) == 28_672
+    assert opencode_output_limit(8_192) == 4_096
+    assert opencode_output_limit(8_192, 6_000) == 4_096
+    assert opencode_output_limit(262_144, 8_000) == 8_000
+    assert opencode_output_limit(262_144, 0) == 32_000
+
+
+def test_written_config_reserves_half_of_a_small_window(tmp_path):
+    from mtplx.opencode import write_opencode_config
+
+    config_path = tmp_path / "opencode.json"
+    result = write_opencode_config(
+        path=config_path,
+        base_url="http://127.0.0.1:8000/v1",
+        model_id="mtplx-qwen38-27b-optimized-speed-fp16",
+        context_window=8_192,
+    )
+    assert result["output_limit"] == 4_096
+    written = json.loads(config_path.read_text())
+    model = written["provider"]["mtplx"]["models"]["mtplx-qwen38-27b-optimized-speed-fp16"]
+    assert model["limit"] == {"context": 8192, "output": 4096}
