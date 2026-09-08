@@ -80,6 +80,41 @@ def test_the_window_bounds_the_search():
     assert spliced == committed and receipt["spans"] == 1
 
 
+NL, COLON, IM_END, WORD, OTHER = 198, 25, 248046, 300, 301
+WS_VOCAB = {COLON: ":", NL: "\n", IM_END: "<|im_end|>", WORD: "word", OTHER: "other"}
+
+
+def test_trailing_whitespace_the_response_stripped_is_put_back():
+    # A length-cut turn ended in a newline token; the visible content came
+    # back stripped, so the echoed history puts the end-of-turn marker where
+    # the newline was. The committed newline is served, then the marker.
+    tok = VocabTokenizer(WS_VOCAB)
+    committed = [WORD, COLON, NL]
+    prompt = [WORD, COLON, IM_END, NL, WORD]
+    out, receipt = oa._splice_committed_token_ids(prompt, committed, tok)
+    assert out == [WORD, COLON, NL, IM_END, NL, WORD]
+    assert receipt["whitespace_tokens"] == 1 and receipt["spans"] == 1
+    assert receipt["cp_after"] == len(committed)
+
+
+def test_leading_whitespace_the_response_stripped_is_put_back():
+    tok = VocabTokenizer(WS_VOCAB)
+    committed = [COLON, NL, NL, WORD, COLON]
+    prompt = [COLON, WORD, COLON, IM_END]
+    out, receipt = oa._splice_committed_token_ids(prompt, committed, tok)
+    assert out == [COLON, NL, NL, WORD, COLON, IM_END]
+    assert receipt["whitespace_tokens"] == 2
+    assert receipt["cp_after"] == len(committed)
+
+
+def test_whitespace_before_a_real_edit_is_not_spliced():
+    tok = VocabTokenizer(WS_VOCAB)
+    committed = [WORD, NL, OTHER]
+    prompt = [WORD, COLON, IM_END]
+    out, receipt = oa._splice_committed_token_ids(prompt, committed, tok)
+    assert out == prompt and receipt["spans"] == 0
+
+
 def test_already_extending_prompts_are_untouched():
     tok = VocabTokenizer(VOCAB)
     committed = [1, 2, 3]

@@ -13160,6 +13160,21 @@ _COMMITTED_SPLICE_WINDOW = 8
 _COMMITTED_SPLICE_MAX_SPANS = 256
 
 
+def _is_chat_control_token(tokenizer: Any, token_id: int) -> bool:
+    """A chat-template control token (``<|im_end|>``, ``<end_of_turn>``)."""
+    special = getattr(tokenizer, "all_special_ids", None)
+    try:
+        if special and int(token_id) in {int(x) for x in special}:
+            return True
+    except Exception:
+        pass
+    try:
+        text = tokenizer.decode([int(token_id)])
+    except Exception:
+        return False
+    return isinstance(text, str) and len(text) > 2 and text[0] == "<" and text[-1] == ">"
+
+
 def _splice_committed_token_ids(
     prompt_ids: Sequence[int],
     committed: Sequence[int],
@@ -13217,6 +13232,29 @@ def _splice_committed_token_ids(
             continue
         if spans >= max_spans:
             break
+        # Whitespace the response stripped. The visible content is served
+        # with its leading and trailing whitespace removed, so the model's
+        # own whitespace tokens are missing from the re-rendered history
+        # (a length-cut turn ending in a newline: committed ``:``, ``\n``,
+        # history ``:``, ``<|im_end|>``). Put them back where the streams
+        # re-align right after them, or where the committed stream ends
+        # with them and the prompt goes on with a chat-control token.
+        ws = 0
+        while ws < window and c + ws < len(stream):
+            piece = _text(stream[c + ws : c + ws + 1])
+            if piece is None or piece.strip():
+                break
+            ws += 1
+        if ws:
+            end = c + ws
+            realigned = end < len(stream) and stream[end] == prompt[p]
+            tail = end == len(stream) and _is_chat_control_token(tokenizer, prompt[p])
+            if realigned or tail:
+                out.extend(stream[c:end])
+                receipt["whitespace_tokens"] = int(receipt.get("whitespace_tokens", 0)) + ws
+                spans += 1
+                c = end
+                continue
         found: tuple[int, int] | None = None
         for total in range(2, 2 * window + 1):
             for dp in range(1, min(window, total - 1) + 1):
