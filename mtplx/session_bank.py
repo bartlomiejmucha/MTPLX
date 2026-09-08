@@ -1717,7 +1717,6 @@ class SessionBank:
         restore_point = matched
         boundary_snapshot: CacheSnapshot | None = None
         boundary_hidden: Any | None = None
-        gap_from_entry = int(entry.prefix_len) - matched
         needs_boundary = bool(entry.has_recurrent)
         if needs_boundary:
             boundary = entry.recurrent_boundary_at_or_below(matched)

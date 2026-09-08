@@ -51,9 +51,6 @@ def _text_model(model: Any) -> Any:
 
 
 def _make_requantized_head(module: Any, *, bits: int, group_size: int, mode: str) -> tuple[Any, dict[str, Any]]:
-    import mlx.core as mx
-    import mlx.nn as nn
-
     started = time.perf_counter()
     if (
         int(module.bits) == int(bits)

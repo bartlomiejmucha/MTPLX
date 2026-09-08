@@ -3,8 +3,6 @@ pipelined-AR device sampler follows the reference nucleus law."""
 
 from __future__ import annotations
 
-import math
-
 import mlx.core as mx
 import numpy as np
 import pytest
