@@ -180,6 +180,56 @@ def _http_probe(url: str, *, timeout: float = 1.0) -> dict[str, Any]:
         return {"ok": False, "error": repr(exc)}
 
 
+def runtime_identity(mlx_info: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Which MTPLX is answering, from where, and on which GPU class.
+
+    Issue #479: a macOS 15 / M2 Max report showed a kernel that only builds on
+    an M5-class GPU under macOS 26.2 or newer, from a checkout whose gate makes
+    that compile unreachable. The paste could not show whether the failing
+    process ran that checkout or an older launcher on PATH (the installer's
+    ``~/.local/bin`` shim, a Homebrew venv, the app runtime). Say it in the
+    first doctor block so the next report answers the question itself.
+    """
+    import importlib.metadata as importlib_metadata
+
+    import mtplx
+
+    on_path = shutil.which("mtplx")
+    info: dict[str, Any] = {
+        "mtplx_version": None,
+        "mtplx_path": str(Path(mtplx.__file__).resolve().parent),
+        "python_executable": sys.executable,
+        "mtplx_on_path": on_path,
+        "launcher_matches_this_python": None,
+    }
+    try:
+        info["mtplx_version"] = importlib_metadata.version("mtplx")
+    except importlib_metadata.PackageNotFoundError:
+        pass
+    if on_path:
+        launcher = Path(on_path).resolve()
+        this_bin = Path(sys.executable).resolve().parent
+        same = launcher.parent == this_bin
+        if not same:
+            # The installer's shim is a shell script that exec's a venv by
+            # absolute path; accept it when it names this interpreter's venv.
+            try:
+                same = str(this_bin) in launcher.read_text(errors="ignore")[:4096]
+            except OSError:
+                same = False
+        info["launcher_matches_this_python"] = bool(same)
+    architecture = (mlx_info or {}).get("gpu_architecture")
+    if architecture:
+        info["gpu_architecture"] = str(architecture)
+        try:
+            from mtplx.nax_verify import nax_available
+
+            info["nax_route_available"] = bool(nax_available())
+        except Exception as exc:  # pragma: no cover - host dependent
+            info["nax_probe_error"] = repr(exc)
+    return info
+
+
 def host_report(*, model_cache: str | Path | None = None) -> dict[str, Any]:
     cache_root = Path(model_cache or os.environ.get("MTPLX_MODEL_DIR") or "~/.mtplx/models").expanduser()
     macos = _run(["sw_vers", "-productVersion"]) if platform.system() == "Darwin" else {}
@@ -395,6 +445,23 @@ def build_diagnostic_checks(
             "runtime. CLI installs: force-reinstall with the command below.",
             DOCS["mlx"],
             "python3 -m pip install --force-reinstall mlx 'mtplx[server]'",
+        )
+    )
+    identity = runtime_identity(mlx)
+    launcher_ok = identity.get("launcher_matches_this_python") is not False
+    checks.append(
+        DiagnosticCheck(
+            "runtime.identity",
+            "pass" if launcher_ok else "warn",
+            "warning",
+            identity,
+            "the `mtplx` on PATH runs the same MTPLX this doctor imported",
+            "Two MTPLX runtimes are installed (an installer launcher in "
+            "~/.local/bin, a Homebrew venv, the app runtime, a source checkout) "
+            "and the first on PATH is not this one. `which -a mtplx` lists "
+            "them; run the one you mean, or move the other off PATH.",
+            None,
+            "which -a mtplx",
         )
     )
     memory_check = _default_model_memory_check(host)

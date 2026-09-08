@@ -8,6 +8,22 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Added
 
+- **Idle limit for the warm session cache** (issue #481). Nothing in the
+  daemon dropped warm state on a five- or ten-minute clock (the only idle
+  timer is one hour; the ten-minute window orders eviction victims under
+  pressure), but the limit was not adjustable and none of the cache
+  variables were documented. `MTPLX_SESSION_BANK_IDLE_TTL_S` now sets the
+  idle limit (`0` keeps entries until memory needs them), and the five
+  `MTPLX_SESSION_BANK_*` variables are documented together in
+  `docs/server.md`.
+- **`mtplx doctor` names the runtime that answers** (issue #479). A new
+  `runtime.identity` check reports the MTPLX version and path the doctor
+  imported, the `mtplx` first on PATH and whether it runs the same
+  interpreter (an installer shim or Homebrew venv ahead of a source
+  checkout is a warning with `which -a mtplx` as the fix), and the GPU
+  architecture with whether the M5 tensor-unit route is available. The
+  issue's kernel-build failure on macOS 15 is unreachable on 2.11.2 code;
+  the check answers which MTPLX actually ran.
 - **Responses API** (Philip John Basile). `POST /v1/responses` is served as
   a stateless, text-only adapter over the chat runtime, covering
   client-executed function, custom and namespace tools, with SDK-backed
@@ -45,6 +61,16 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
+- **OpenCode compacted after every reply on small context windows** (issue
+  #480). MTPLX registered the model with OpenCode with the reply limit equal
+  to the context window; OpenCode reserves the reply limit out of the window
+  before deciding whether the conversation still fits, so on an 8K window
+  the usable conversation was zero tokens and OpenCode wrote its
+  `## Objective / Important Details / Work State` summary after every turn
+  (48 summaries in 98 turns in the report). `mtplx connect opencode`, the
+  quickstart and the app now advertise a reply budget of half the window,
+  capped at the 32,000 OpenCode uses on large windows, so compaction happens
+  only when the conversation is near the limit.
 - **261,120-token prompts decode on Flash-Next** (PR #482, davidtai). At
   the pack's full context the first speculative verify step ran out of GPU
   memory after the whole prompt had been read: the verify's KV-cache update

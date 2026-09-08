@@ -47,6 +47,7 @@ def test_diagnostics_payload_has_production_checks(tmp_path) -> None:
         "python.native_arm64",
         "python.version",
         "mlx.import",
+        "runtime.identity",
         "resource.memory",
         "resource.model_cache_disk",
         "model.cache",
@@ -118,3 +119,52 @@ def test_write_doctor_bundle_creates_redacted_zip(tmp_path) -> None:
     assert bundle["bundle_zip"].endswith(".zip")
     assert (tmp_path / bundle["bundle_id"] / "doctor.json").exists()
     assert (tmp_path / f"{bundle['bundle_id']}.zip").exists()
+
+
+def test_runtime_identity_flags_a_foreign_launcher_on_path(tmp_path, monkeypatch) -> None:
+    """Issue #479: an installer shim ahead of the venv on PATH answers with an
+    older MTPLX; the doctor names the mismatch instead of leaving it to the
+    paste."""
+    import sys
+
+    from mtplx import diagnostics
+
+    foreign = tmp_path / "other-venv" / "bin" / "mtplx"
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text("#!/bin/sh\nexec /somewhere/else/bin/python -m mtplx \"$@\"\n")
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda name: str(foreign))
+    identity = diagnostics.runtime_identity({"gpu_architecture": "applegpu_g14s"})
+    assert identity["launcher_matches_this_python"] is False
+    assert identity["mtplx_on_path"] == str(foreign)
+    assert identity["gpu_architecture"] == "applegpu_g14s"
+    assert identity["python_executable"] == sys.executable
+
+    checks = {c["id"]: c for c in diagnostics.build_diagnostics_payload(
+        model_cache=tmp_path, mlx_info={"mlx_error": "missing"}, thermal_control={"available": False}
+    )["checks"]}
+    assert checks["runtime.identity"]["status"] == "warn"
+    assert checks["runtime.identity"]["command"] == "which -a mtplx"
+
+
+def test_runtime_identity_accepts_a_shim_naming_this_venv(tmp_path, monkeypatch) -> None:
+    import sys
+    from pathlib import Path
+
+    from mtplx import diagnostics
+
+    shim = tmp_path / "shim" / "mtplx"
+    shim.parent.mkdir(parents=True)
+    this_bin = Path(sys.executable).resolve().parent
+    shim.write_text(f"#!/bin/sh\nexec {this_bin}/python -m mtplx \"$@\"\n")
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda name: str(shim))
+    identity = diagnostics.runtime_identity(None)
+    assert identity["launcher_matches_this_python"] is True
+    assert "gpu_architecture" not in identity
+
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda name: None)
+    identity = diagnostics.runtime_identity(None)
+    assert identity["launcher_matches_this_python"] is None
+    checks = {c["id"]: c for c in diagnostics.build_diagnostics_payload(
+        model_cache=tmp_path, mlx_info={"mlx_error": "missing"}, thermal_control={"available": False}
+    )["checks"]}
+    assert checks["runtime.identity"]["status"] == "pass"
