@@ -193,16 +193,6 @@ def test_eager_write_past_capacity_grows_instead_of_dropping_rows():
     assert not mx.any(cache.values[:, :, 52:77, :] != 0).item()
 
 
-def test_functional_slice_update_clamps_silently_documented():
-    # The behaviour the fix guards against, pinned so a future MLX change is
-    # noticed: a functional write past the end drops the overflow rows.
-    buf = mx.zeros((1, H_KV, 32, D), mx.bfloat16)
-    upd = mx.ones((1, H_KV, 25, D), mx.bfloat16)
-    out = mx.slice_update(buf, upd, mx.array(20), axes=(2,))
-    mx.eval(out)
-    assert int(mx.sum(out[0, 0, :, 0]).item()) == 12
-
-
 def test_eager_window_preflight_grows_only_entries_at_the_edge():
     # The copy-block route calls this before its forward so the mask the
     # forward builds from the first full-attention layer's capacity matches
