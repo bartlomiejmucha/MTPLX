@@ -51,8 +51,11 @@ def test_apply_profile_env_refreshes_the_gates_it_just_wrote(clean_flags, monkey
         assert generation._QWEN4_BLOCK_VERIFY is True
         assert runtime_options.qwen4_opdiet_enabled() is True
     finally:
+        # apply_profile_env wrote these straight into os.environ; a
+        # monkeypatch.delenv here would record that value and put it back at
+        # teardown, leaking the gates into the next test file.
         for key in KEYS:
-            monkeypatch.delenv(key, raising=False)
+            os.environ.pop(key, None)
         runtime_options.refresh_env_flags({})
 
 
