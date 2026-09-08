@@ -84,6 +84,16 @@ observability records the requested and effective values plus whether the
 request was downgraded. The Responses payload echoes the client's requested
 reasoning configuration.
 
+## Reasoning effort
+
+Thinking depth is a request-level setting with a server-level default.
+
+- Per request: `reasoning_effort` in the chat completions body (`"reasoning_effort": "high"`), or `reasoning.effort` on the Responses API. Accepted values are `low`, `medium`, `high` and `xhigh`. OpenAI's `minimal` and `none` (and `off`, `disable`, `disabled`) are accepted and map to `low`; they do not switch thinking off.
+- Server default: `mtplx start --reasoning-effort high` (or `mtplx serve`) applies to every request that carries no value. `auto` (the default) uses the loaded model family's own default.
+- App: the effort picker in the chat settings lists the levels the loaded model supports.
+
+The levels that take effect depend on the family: Qwen 3.8 honours all four including `xhigh`, Step 3.5 clamps `xhigh` to `high`, and Qwen 3.6 has no effort tiers (the value is accepted and ignored). To turn thinking off entirely use `--reasoning off` on the server or `chat_template_kwargs: {"enable_thinking": false}` on the request. The request log records the requested and effective values and whether the request was downgraded.
+
 ## `POST /v1/messages`
 
 Anthropic Messages baseline. Requests are translated into the same internal chat path as `/v1/chat/completions` and returned as Anthropic-shaped message payloads.
