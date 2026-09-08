@@ -196,8 +196,18 @@ def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-#: Read exactly once, at import.
+#: Read at import and re-read by :func:`refresh_from_env` when the server
+#: installs a model family's runtime env (before any model load).
 _ENABLED = _env_truthy(_ENV_VAR)
+
+
+def refresh_from_env(env: Any | None = None) -> bool:
+    """Re-read the gate from ``env`` (default ``os.environ``); returns it."""
+
+    global _ENABLED
+    source = os.environ if env is None else env
+    _ENABLED = str(source.get(_ENV_VAR, "")).strip().lower() in {"1", "true", "yes", "on"}
+    return _ENABLED
 
 
 def is_enabled() -> bool:

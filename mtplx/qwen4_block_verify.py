@@ -133,16 +133,39 @@ def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-#: Read exactly once, at import.  Every call site in ``generation.py`` is
-#: behind the module-level constant this feeds, so when the flag is unset the
-#: accept loop evaluates the same expressions, in the same order, drawing the
-#: same uniforms, as it did before this module existed.
-_ENABLED = _env_truthy(_ENV_VAR)
+def _read_gate(env: Any | None = None) -> bool:
+    source = os.environ if env is None else env
+    return str(source.get(_ENV_VAR, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+#: Read at import and re-read by :func:`refresh_from_env` when the server
+#: installs a model family's runtime env (before any model load), never on
+#: the hot path.  Every call site in ``generation.py`` is behind the
+#: module-level constant this feeds, so when the flag is unset the accept
+#: loop evaluates the same expressions, in the same order, drawing the same
+#: uniforms, as it did before this module existed.  Until 2026-09-08 the
+#: import-time read was the only one, and ``mtplx serve`` imports
+#: ``generation`` before ``ServerState`` stamps the Flash-Next lane defaults,
+#: so the served daemon never ran this law however the defaults read
+#: (PR #475 by davidtai found the same frozen reader).
+_ENABLED = _read_gate()
 
 
 def is_enabled() -> bool:
-    """True when ``MTPLX_QWEN4_BLOCK_VERIFY`` was set at import."""
+    """True when ``MTPLX_QWEN4_BLOCK_VERIFY`` is armed."""
 
+    return _ENABLED
+
+
+def refresh_from_env(env: Any | None = None) -> bool:
+    """Re-read the gate from ``env`` (default ``os.environ``); returns it.
+
+    Called by ``mtplx.runtime_options.refresh_env_flags`` after the profile
+    and model-contract env is applied, before the model loads.
+    """
+
+    global _ENABLED
+    _ENABLED = _read_gate(env)
     return _ENABLED
 
 
@@ -557,5 +580,6 @@ __all__ = [
     "build_verifier",
     "is_enabled",
     "prepared_pair",
+    "refresh_from_env",
     "water_fill_lambda",
 ]

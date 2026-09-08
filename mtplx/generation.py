@@ -324,19 +324,39 @@ def _env_falsey(name: str) -> bool:
 # ascending.  See that module's docstring for the exactness argument.
 _QWEN4_DRAFT_K20_PRESCATTER = _qwen4_draft_k20_prescatter_enabled()
 
-# MTPLX_QWEN4_BLOCK_VERIFY -- read ONCE at import (in
-# ``mtplx.qwen4_block_verify``), default OFF.  When off this constant is False,
+# MTPLX_QWEN4_BLOCK_VERIFY -- read at import (in ``mtplx.qwen4_block_verify``)
+# and re-copied by ``refresh_env_flags`` below once the server has stamped the
+# model family's runtime env, default OFF.  When off this constant is False,
 # no verifier is built, and the stock accept loop evaluates exactly the
 # expressions it evaluated before -- same acceptance probability, same
 # residual, same uniforms, same order.  When on, the loop runs block
 # verification (Sun et al. 2024, arXiv:2403.10444) instead of the per-token
-# Leviathan-Chen law: it clips the RUNNING reach product at 1 rather than
-# clipping each factor, water-fills the resulting budget across the depth d+1
-# draft support, and corrects from the SCALED residual (c*p - q)+.  Both laws
-# are exact samplers of the same target distribution; BV accepts deeper more
-# often (+1.85% tokens/window measured offline on 381 real windows) and draws
-# exactly the same number of uniforms.  See ``mtplx/qwen4_block_verify.py``.
+# Leviathan-Chen law: the reach budget is carried across depths instead of
+# clipping each factor, water-filled across the depth d+1 draft support, and
+# a rejection corrects from the deficit residual.  Both laws are exact
+# samplers of the same target distribution (tests/test_block_verify_exact_law.py
+# enumerates both); BV accepts deeper more often (+1.85% tokens/window
+# measured offline on 381 real windows) and draws exactly the same number of
+# uniforms.  See ``mtplx/qwen4_block_verify.py``.
 _QWEN4_BLOCK_VERIFY = _qwen4_block_verify_enabled()
+
+
+def refresh_env_flags() -> dict[str, bool]:
+    """Re-copy the import-frozen gates from their owning modules.
+
+    ``mtplx.runtime_options.refresh_env_flags`` re-reads the environment in
+    the owning modules and then calls this, so the two constants above track
+    the model family's runtime env the server stamped after this module was
+    imported. Runs before any model load; never on the hot path.
+    """
+
+    global _QWEN4_DRAFT_K20_PRESCATTER, _QWEN4_BLOCK_VERIFY
+    _QWEN4_DRAFT_K20_PRESCATTER = _qwen4_draft_k20_prescatter_enabled()
+    _QWEN4_BLOCK_VERIFY = _qwen4_block_verify_enabled()
+    return {
+        "MTPLX_QWEN4_DRAFT_K20_PRESCATTER": bool(_QWEN4_DRAFT_K20_PRESCATTER),
+        "MTPLX_QWEN4_BLOCK_VERIFY": bool(_QWEN4_BLOCK_VERIFY),
+    }
 
 def _family_capture_commit_enabled() -> bool:
     """qwen4_exp layer-owned capture-commit (``MTPLX_FAMILY_CAPTURE_COMMIT``).

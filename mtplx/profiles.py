@@ -1009,6 +1009,13 @@ def apply_profile_env(
     for key, value in overrides.items():
         target[key] = value
     announce_runtime_gated_env(target, profile_name=profile.name)
+    if environ is None:
+        # The gates that generation/kernels froze at import must follow the
+        # env just written (model-family lane defaults included); nothing has
+        # been loaded or compiled yet at every call site of this function.
+        from .runtime_options import refresh_env_flags
+
+        refresh_env_flags()
     return previous
 
 
