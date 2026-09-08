@@ -61,6 +61,11 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
+- **Flight recorder counts non-streaming requests.** A non-streaming
+  chat completion fed the recorder no token events, so `mtplx trace`
+  showed a 24k-token generation as a prefill with zero tokens for its
+  whole life. Non-streaming requests now report their tokens as they
+  are produced, the same as streamed ones.
 - **OpenCode compacted after every reply on small context windows** (issue
   #480). MTPLX registered the model with OpenCode with the reply limit equal
   to the context window; OpenCode reserves the reply limit out of the window
