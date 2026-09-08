@@ -11479,6 +11479,64 @@ def _tool_call_loop_key(tool_call: dict[str, Any]) -> tuple[str, str, str] | Non
     return name, key_payload, command or key_payload
 
 
+def _canonical_tool_argument(value: Any) -> Any:
+    """Argument value in the one shape both tool-call dialects reduce to.
+
+    The client echoes structured JSON (ints, bools, nested lists); the
+    committed stream carries the model's own ``<parameter=k>v</parameter>``
+    text, where every value is a string and a nested value is JSON text. Both
+    sides meet here: containers recurse, JSON-looking strings are parsed and
+    recursed, scalars become stripped strings (``True`` -> ``"true"``).
+    Whitespace at the ends is not identity: the committed parser strips one
+    newline around a value and clients strip a trailing newline from
+    ``content`` (the 2026-09-03 write-turn seam), and neither changes what
+    the call does.
+    """
+
+    if isinstance(value, dict):
+        return {str(key): _canonical_tool_argument(item) for key, item in sorted(value.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(value, (list, tuple)):
+        return [_canonical_tool_argument(item) for item in value]
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        text = value.strip()
+        if text[:1] in "[{":
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                return text
+            if isinstance(parsed, (dict, list)):
+                return _canonical_tool_argument(parsed)
+        return text
+    return str(value).strip()
+
+
+def _tool_call_identity(tool_call: dict[str, Any]) -> tuple[str, str] | None:
+    """``(name, canonical arguments JSON)``: the call's complete identity.
+
+    This is what the committed-reasoning gate compares. The loop key above is
+    deliberately lossy (it names a command or a path so a retried tool call
+    can be recognised as a repeat); it must never decide whether two calls
+    are the same call, because a ``write`` to the same path with different
+    content compares equal under it and the gate then put the OLD content
+    back into the prompt (Codex audit, 2026-09-08). None when the call has
+    no confident name (callers treat None as a mismatch).
+    """
+
+    name = _tool_call_name(tool_call)
+    if not name:
+        return None
+    args = _canonical_tool_argument(_tool_call_arguments(tool_call))
+    try:
+        payload = json.dumps(args, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    except TypeError:
+        payload = str(args)
+    return name, payload
+
+
 def _tool_result_is_timeout(text: str) -> bool:
     if not text:
         return False
@@ -13180,24 +13238,21 @@ _COMMITTED_PARAMETER_RE = re.compile(
 )
 
 
-def _committed_turn_tool_keys(tool_markup: str) -> list[tuple[str, str, str]] | None:
-    """Loop keys of a committed turn's tool-call markup, or None if the
-    markup cannot be parsed confidently.
+def _committed_turn_tool_calls(tool_markup: str) -> list[dict[str, Any]] | None:
+    """The tool calls a committed turn's markup carries, as ``{name, arguments}``
+    dicts, or None if the markup cannot be parsed confidently.
 
     Committed streams carry two markup dialects: the template's native
-    ``<tool_call>\\n{json}\\n</tool_call>`` re-render of structured history
+    ``<tool_call>\n{json}\n</tool_call>`` re-render of structured history
     and the contract's ``<function=name><parameter=k>v`` form the model
-    emits live. Both reduce to the same :func:`_tool_call_loop_key`
-    identity used for the incoming structured tool_calls, so the gate
-    compares like with like. None (unparseable) must be treated as a
-    mismatch by callers — refusing substitution is always safe; guessing
-    is not.
+    emits live. None (unparseable) must be treated as a mismatch by callers:
+    refusing substitution is always safe; guessing is not.
     """
     if not tool_markup:
         return []
     if "<tool_call" not in tool_markup:
         return []
-    keys: list[tuple[str, str, str]] = []
+    calls: list[dict[str, Any]] = []
     matched_any = False
     for match in _COMMITTED_TOOL_CALL_BLOCK_RE.finditer(tool_markup):
         matched_any = True
@@ -13224,13 +13279,53 @@ def _committed_turn_tool_keys(tool_markup: str) -> list[tuple[str, str, str]] | 
             call = {"name": name_match.group(1), "arguments": params}
         else:
             return None
+        calls.append(call)
+    if not matched_any:
+        return None
+    return calls
+
+
+def _committed_turn_tool_keys(tool_markup: str) -> list[tuple[str, str, str]] | None:
+    """Loop keys of a committed turn's tool calls (repeat detection only)."""
+    calls = _committed_turn_tool_calls(tool_markup)
+    if calls is None:
+        return None
+    keys: list[tuple[str, str, str]] = []
+    for call in calls:
         key = _tool_call_loop_key(call)
         if key is None:
             return None
         keys.append(key)
-    if not matched_any:
-        return None
     return keys
+
+
+def _committed_turn_tool_identities(tool_markup: str) -> list[tuple[str, str]] | None:
+    """Complete identities of a committed turn's tool calls (the gate)."""
+    calls = _committed_turn_tool_calls(tool_markup)
+    if calls is None:
+        return None
+    identities: list[tuple[str, str]] = []
+    for call in calls:
+        identity = _tool_call_identity(call)
+        if identity is None:
+            return None
+        identities.append(identity)
+    return identities
+
+
+def _incoming_tool_identities(
+    tool_calls: list[dict[str, Any]] | None,
+) -> list[tuple[str, str]] | None:
+    """Complete identities of an incoming turn's structured tool_calls."""
+    if not tool_calls:
+        return []
+    identities: list[tuple[str, str]] = []
+    for tool_call in tool_calls:
+        identity = _tool_call_identity(tool_call)
+        if identity is None:
+            return None
+        identities.append(identity)
+    return identities
 
 
 def _incoming_tool_loop_keys(
@@ -13316,16 +13411,19 @@ def _substitute_committed_reasoning_messages(
             canon_messages.append(message)
             continue
         interior, gate, tool_markup = committed_turns[ordinal]
-        incoming_keys = _incoming_tool_loop_keys(message.tool_calls)
-        committed_keys = _committed_turn_tool_keys(tool_markup)
+        incoming_identity = _incoming_tool_identities(message.tool_calls)
+        committed_identity = _committed_turn_tool_identities(tool_markup)
         if (
-            incoming_keys is None
-            or committed_keys is None
-            or incoming_keys != committed_keys
+            incoming_identity is None
+            or committed_identity is None
+            or incoming_identity != committed_identity
         ):
             # Tool-call identity is part of the gate: a branch switch that
             # changed ONLY the tool calls must not inherit reasoning that
-            # argued for the old calls (prefix rule, mirrors restore).
+            # argued for the old calls (prefix rule, mirrors restore). The
+            # identity is the COMPLETE argument set: the lossy loop key
+            # (command / path only) let a write to the same path with new
+            # content pass, and the substitution then served the old body.
             substitution_open = False
             canon_messages.append(message)
             continue

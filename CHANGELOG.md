@@ -45,6 +45,70 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
+- **Flash-Next block verification is exact at every depth.** Three
+  independent audits enumerated the block-verify accept law on tiny
+  vocabularies and found it exact at depths 1 and 2 but off by up to 4e-2
+  total variation at depth 3, on windows where the last depth's coin had
+  been clipped to 1. The ladder now caps the reach budget by the realised
+  reach, propagates that feasible budget, and corrects a rejection from the
+  deficit the coins leave; an enumeration test compares the emitted joint
+  law with the target for both laws at depths 1 to 4 (exact to 1e-12).
+- **Warm agent turns on hybrid models restore the recurrent state exactly.**
+  A near-prefix restore whose gap to the banked turn was 1 to 8 tokens (the
+  shape of a re-rendered agent turn) trimmed the attention KV but kept the
+  GDN state from the longer sequence, then re-ran one token on it; the whole
+  turn decoded on state the new prompt never produced and later turns
+  inherited it, on the 8-bit Quality pack exactly like the 4-bit ones. Every
+  partial restore of a recurrent entry now lands on a stored recurrent
+  boundary at or below the match point.
+- **The banked state after an MTP turn covers every committed token.** The
+  primary that ended a response (a deferred greedy correction, a fresh
+  sample, or any max_tokens exit) was committed but never forwarded, so the
+  banked state was one token short of the key it was filed under and the
+  next warm turn decoded as if the terminator never existed (temperature-0
+  clients such as Cline hit it every turn). The ending primary is now
+  forwarded before the state is banked.
+- **Non-finite logits fail loudly** instead of becoming token 0, which is
+  `!` in the Qwen vocabulary (the thousands of exclamation marks of issue
+  #311). The request ends with `finish_reason: error`, code
+  `non_finite_logits`, a message with the NaN/inf counts, the session's
+  cached state is dropped, and the daemon stays up.
+- **The Flash-Next AR sampler follows the reference nucleus law.** The
+  pipelined AR sampler measured top-p on the top-k slice alone, keeping one
+  to five fewer of the top-20 tokens than every other lane at 1.0/0.95/20;
+  it now measures the nucleus on the full-vocabulary softmax like the CPU
+  reference (test: identical supports, total variation below 1e-5).
+- **Hindi, Thai and vowelled Arabic tokenize as the model was trained.**
+  transformers' Qwen2Tokenizer replaced the packs' pre-tokenizer regex with
+  its Qwen2-era one, splitting combining marks off their letters (Hindi 32
+  tokens instead of 20, Thai 17 instead of 9, Arabic 45 instead of 31 on the
+  same sentences; Latin, code and Chinese unchanged), and the six 27B packs
+  shipped that regex baked into tokenizer.json. The loader restores the
+  Qwen3 regex on every Qwen3-family pack.
+- **32 GB Macs get a working draft head** (issue #483, HeyCocoa). The
+  fast draft LM head was built through a 2.4 GiB dense intermediate; on an
+  M1 Pro 32 GB the requantize hit a silent Metal out-of-memory and the head
+  read back as zeros, collapsing MTP acceptance to under 1%. The head is
+  now built in row chunks (bit-identical result, no dense intermediate), a
+  zeroed head is refused, and the install falls back to the resident target
+  head as the drafter.
+- **A mid-conversation system message no longer rewrites message 0**
+  (issue #477). Claude Code's per-turn `<system-reminder>` notes arrive as
+  late system messages; hoisting them into the leading system message
+  changed the first message every turn and cost a cold re-prefill of the
+  whole history. A late system message now becomes a user turn in place.
+- **The Flash-Next serving optimizations reach a served daemon.** Four
+  hot-path gates (`MTPLX_QWEN4_OPDIET`, `MTPLX_QWEN4_VERIFY_GLUE`,
+  `MTPLX_QWEN4_DRAFT_K20_PRESCATTER`, `MTPLX_QWEN4_BLOCK_VERIFY`) were read
+  once at import, before the server stamped the Flash-Next lane defaults,
+  so `/health` reported them configured while the daemon ran with all four
+  off (davidtai's PR #475 found the same frozen readers). The gates are
+  re-read when the model's runtime env is applied, before the load.
+- **Reasoning substitution checks the whole tool call.** The
+  committed-reasoning canonicalizer compared tool calls by their loop key
+  (command or path only), so a `write` to the same file with new content
+  passed the gate and the prompt was served with the old body. The gate now
+  compares the complete argument set in both markup dialects.
 - **Desktop web views can be allowlisted for CORS** (issue #473). The
   origin validator accepted only `http` and `https`, so
   `--cors-origin tauri://localhost` (Jan.app) and `MTPLX_CORS_ORIGINS`

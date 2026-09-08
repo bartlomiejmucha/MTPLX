@@ -500,3 +500,64 @@ def test_substituted_write_turn_re_encodes_to_the_generated_bytes_real_template(
     cp_canon = oa._common_prefix_len(canon_ids, committed)
     assert cp_raw < len(committed), "raw re-render is expected to lose the trailing newline"
     assert cp_canon >= len(committed) - 1, (cp_canon, len(committed))
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-08: the gate compares the COMPLETE tool-call identity, not the loop
+# key (command / path only). Codex's audit reproduced a write to the same path
+# with new content passing the old gate, after which the committed OLD body
+# was served in place of the client's NEW content.
+# ---------------------------------------------------------------------------
+
+
+def test_same_path_different_content_refuses_the_committed_body():
+    turns = oa._committed_assistant_turns(_write_turn_committed_text())
+    changed = _write_turn_message()
+    changed.tool_calls[0]["function"]["arguments"] = json.dumps(
+        {"filePath": "index.html", "content": "NEW_FIXED_IMPLEMENTATION"}
+    )
+    messages = [oa.ChatMessage(role="user", content="make it"), changed]
+    canon, substituted = oa._substitute_committed_reasoning_messages(messages, turns)
+    assert substituted == 0
+    assert oa._message_extra(canon[1], oa._COMMITTED_TURN_BODY_FIELD) is None
+    assert oa._message_extra(canon[1], oa._COMMITTED_REASONING_FIELD) is None
+
+
+def test_identity_ignores_edge_whitespace_and_scalar_typing():
+    # committed <parameter> values are strings with one newline stripped;
+    # the client echoes typed JSON. Same call -> same identity.
+    committed = "<tool_call>\n<function=read><parameter=filePath>\na.py\n</parameter><parameter=offset>10</parameter><parameter=limit>20</parameter></function>\n</tool_call>"
+    incoming = [
+        {
+            "id": "c1",
+            "type": "function",
+            "function": {"name": "read", "arguments": json.dumps({"filePath": "a.py", "offset": 10, "limit": 20})},
+        }
+    ]
+    assert oa._committed_turn_tool_identities(committed) == oa._incoming_tool_identities(incoming)
+
+
+def test_identity_sees_nested_json_parameters_the_same_way():
+    edits = [{"oldString": "a", "newString": "b"}, {"oldString": "c", "newString": "d"}]
+    committed = (
+        "<tool_call>\n<function=multiedit><parameter=filePath>x.py</parameter>"
+        f"<parameter=edits>{json.dumps(edits)}</parameter></function>\n</tool_call>"
+    )
+    incoming = [
+        {"id": "c1", "type": "function", "function": {"name": "multiedit", "arguments": json.dumps({"filePath": "x.py", "edits": edits})}}
+    ]
+    assert oa._committed_turn_tool_identities(committed) == oa._incoming_tool_identities(incoming)
+    other = [
+        {"id": "c1", "type": "function", "function": {"name": "multiedit", "arguments": json.dumps({"filePath": "x.py", "edits": edits[:1]})}}
+    ]
+    assert oa._committed_turn_tool_identities(committed) != oa._incoming_tool_identities(other)
+
+
+def test_identity_covers_the_json_dialect_too():
+    committed = '<tool_call>\n{"name": "bash", "arguments": {"command": "ls -la", "timeout": 30}}\n</tool_call>'
+    same = [{"id": "c1", "type": "function", "function": {"name": "bash", "arguments": json.dumps({"timeout": 30, "command": "ls -la"})}}]
+    different_timeout = [{"id": "c1", "type": "function", "function": {"name": "bash", "arguments": json.dumps({"timeout": 60, "command": "ls -la"})}}]
+    assert oa._committed_turn_tool_identities(committed) == oa._incoming_tool_identities(same)
+    assert oa._committed_turn_tool_identities(committed) != oa._incoming_tool_identities(different_timeout)
+    # the loop key would have called these the same call
+    assert oa._committed_turn_tool_keys(committed) == oa._incoming_tool_loop_keys(different_timeout)
