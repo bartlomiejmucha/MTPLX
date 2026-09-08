@@ -126,7 +126,7 @@ from mtplx.reasoning_effort import (
     normalize_reasoning_effort as _normalize_reasoning_effort,
 )
 from mtplx.retrieval import RetrievalError, RetrievalTrustError
-from mtplx.sampling import SamplerConfig
+from mtplx.sampling import NonFiniteLogitsError, SamplerConfig
 from mtplx.server.request_policy import (
     BackgroundBusyBypass,
     resolve_request_policy,
@@ -17530,6 +17530,57 @@ def _is_allocation_failure(exc: BaseException) -> bool:
     return any(marker in text for marker in _ALLOCATION_FAILURE_MARKERS)
 
 
+def _is_non_finite_logits(exc: BaseException) -> bool:
+    return isinstance(exc, NonFiniteLogitsError)
+
+
+def _non_finite_logits_failure(
+    state: "ServerState",
+    exc: BaseException,
+    *,
+    request_id: str,
+    session_id: str | None = None,
+) -> str:
+    """Log, evict the session's banked state and word the wire message.
+
+    A NaN/inf logits row is a numerical fault upstream of the sampler (a
+    kernel, a quantized KV page, an overflowed fp16 activation). The state
+    that produced it may already sit in the session bank from the prompt
+    encode, so the session's entries are dropped: a warm restore of a
+    poisoned prefix would only reproduce the fault. The daemon stays up.
+    """
+
+    logging.getLogger("mtplx.server").error(
+        "non-finite logits request_id=%s session=%s: %s",
+        request_id,
+        session_id or "-",
+        exc,
+    )
+    dropped = 0
+    if session_id:
+        try:
+            bank = getattr(getattr(state, "sessions", None), "bank", None)
+            if bank is not None:
+                dropped = int(bank.clear(session_id=session_id) or 0)
+        except Exception:
+            dropped = 0
+    _record_guard_event(
+        state,
+        {
+            "action": "non_finite_logits",
+            "request_id": request_id,
+            "session_id": session_id,
+            "detail": str(exc),
+            "bank_entries_dropped": dropped,
+        },
+    )
+    return (
+        f"the model produced non-finite logits ({exc}); this request failed, "
+        "its session's cached state was dropped, and the daemon stays up "
+        f"(request_id={request_id})"
+    )
+
+
 def _record_guard_event(state: "ServerState", payload: dict[str, Any]) -> None:
     """Ring buffer of guard actions for the dashboard/app (never raises)."""
     try:
@@ -32769,6 +32820,19 @@ def create_app(state: ServerState) -> FastAPI:
                             if status_code == 507
                             else type(exc).__name__
                         )
+                    elif _is_non_finite_logits(exc):
+                        try:
+                            _failed_session = session_id
+                        except NameError:  # lane without a session binding
+                            _failed_session = None
+                        message = _non_finite_logits_failure(
+                            state,
+                            exc,
+                            request_id=response_id,
+                            session_id=_failed_session,
+                        )
+                        status_code = 500
+                        error_code = "non_finite_logits"
                     else:
                         message = str(exc)
                         status_code = 500
@@ -35719,6 +35783,16 @@ def create_app(state: ServerState) -> FastAPI:
                 ),
             )
         request_id = uuid.uuid4().hex[:12]
+        if _is_non_finite_logits(exc):
+            # Non-streaming lanes: the same truthful failure the streaming
+            # error frame reports (session id is not known here).
+            message = _non_finite_logits_failure(state, exc, request_id=request_id)
+            return JSONResponse(
+                status_code=500,
+                content=_openai_error_content(
+                    message, status_code=500, code="non_finite_logits"
+                ),
+            )
         # Full detail belongs in the server log, not the wire: exception
         # class + repr in client bodies got quoted verbatim by external
         # endpoint probes as "MTPLX python errors" (2026-08-05 showdown).

@@ -28,14 +28,13 @@ def _host_sparse_distribution(
 ) -> SparseDistribution:
     logits = np.asarray(logits, dtype=np.float32).astype(np.float64).reshape(-1)
     vocab_size = int(logits.shape[0])
-    try:
-        probs = apply_top_p_top_k(
-            softmax(logits, temperature=config.temperature),
-            top_p=config.top_p,
-            top_k=config.top_k,
-        )
-    except ValueError:
-        return SparseDistribution.one_hot(0, vocab_size)
+    # A non-finite row raises NonFiniteLogitsError out of softmax(); it used
+    # to be caught here and turned into a one-hot on token 0 (``!``).
+    probs = apply_top_p_top_k(
+        softmax(logits, temperature=config.temperature),
+        top_p=config.top_p,
+        top_k=config.top_k,
+    )
     token_ids = np.flatnonzero(probs > 0).astype(np.int64, copy=False)
     return SparseDistribution(token_ids, probs[token_ids], vocab_size)
 
@@ -600,8 +599,8 @@ def sparse_distribution_from_mlx_logits(
     dist = _serial_row_distribution(token_rows[0], prob_rows[0], vocab_size)
     if dist is not None:
         return dist
-    # Non-finite mass (NaN/inf logits): keep the host reference's one-hot
-    # fallback semantics.
+    # Non-finite mass (NaN/inf logits): the host reference raises
+    # NonFiniteLogitsError with the row's census.
     mx.eval(row)
     return _host_sparse_distribution(np.asarray(row, dtype=np.float32), config)
 

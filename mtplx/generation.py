@@ -97,6 +97,8 @@ from .qsa_mtp_precompute import (
 )
 from .runtime import MTPLXRuntime
 from .sampling import (
+    NonFiniteLogitsError,
+    non_finite_logits_error,
     SamplerConfig,
     SparseDistribution,
     acceptance_probability as compute_acceptance_probability,
@@ -5201,45 +5203,87 @@ def _sample_from_logits(
                 config.frequency_penalty,
                 penalty_overlay=penalty_overlay,
             )
-        _eval(logits)
-        return int(mx.argmax(logits, axis=-1).item()), None
+        # argmax of a NaN row is token 0 (``!``); one extra reduction in the
+        # same eval keeps the greedy lane as loud as the sampled one.
+        chosen = mx.argmax(logits, axis=-1)
+        finite = mx.all(mx.isfinite(logits))
+        _eval(chosen, finite)
+        if not bool(finite.item()):
+            row = np.asarray(logits.astype(mx.float32))
+            raise non_finite_logits_error(row, "greedy argmax")
+        return int(chosen.item()), None
     probs = _distribution_from_mlx_logits(
         logits, config, token_counts=token_counts, penalty_overlay=penalty_overlay
     )
     return sample_from_distribution(probs, rng), probs
 
 
-def _mx_lazy_sample(row: mx.array, config: SamplerConfig, key: mx.array) -> mx.array:
-    """Device-side shaped sampling (temp -> top-k -> top-p -> categorical)
-    returning a LAZY scalar token array — the pipelined-AR lane's sampler.
+def _mx_lazy_shape(
+    row: mx.array, config: SamplerConfig
+) -> tuple[mx.array, mx.array, mx.array]:
+    """Shape one logits row on device: ``(ids, log_weights, bad)``.
 
-    Shaping is distribution-identical to the CPU sampler; the randomness
-    stream is mx.random keyed from the request seed instead of the numpy
-    generator, so runs stay deterministic per seed but the streams differ.
-    Callers gate on temperature > 0 and 1 < top_k < vocab.
+    ``ids`` are the top-k token ids ranked by value, ``log_weights`` their
+    temperature-scaled logits with the entries outside the nucleus set to
+    -inf (a categorical over ``log_weights`` is the shaped distribution),
+    and ``bad`` a lazy scalar that is true when the row carries NaN or +inf
+    (or is all -inf).
+
+    Shaping is distribution-identical to the CPU sampler
+    (``sampling.apply_top_p_top_k``): the nucleus keeps the ranked top-k
+    entries whose cumulative mass BEFORE them, measured on the softmax over
+    the FULL vocabulary, is below top_p, and the survivors are renormalised
+    for the draw. Until 2026-09-08 the nucleus was measured on the softmax of
+    the k survivors alone; that renormalisation made the mass cross top_p
+    one to five tokens earlier than every other lane at the family's
+    1.0/0.95/20 settings (three audits: 4-5% total variation per token), so
+    Flash-Next AR was sharper than Flash-Next MTP and not a clean control.
 
     The top-k selection runs on the model dtype (half the bytes over the
-    248k vocab); only the k survivors are cast to fp32 for temperature,
-    top-p and the draw — bf16 argpartition ranks by value exactly.
+    248k vocab); only the k survivors are cast to fp32 for temperature and
+    top-p — bf16 argpartition ranks by value exactly. The full row is read
+    once more for the fp32 log-normaliser and the finiteness flag; both are
+    single reductions on a row the model just wrote.
     """
     k = int(config.top_k or 0)
+    inv_temperature = 1.0 / max(float(config.temperature), 1e-6)
     top_idx = mx.argpartition(-row, kth=k - 1)[:k]
-    logits = mx.take(row, top_idx).astype(mx.float32) * (
-        1.0 / max(float(config.temperature), 1e-6)
-    )
-    top_vals = logits
+    top_vals = mx.take(row, top_idx).astype(mx.float32) * inv_temperature
+    order = mx.argsort(-top_vals)
+    ids = mx.take(top_idx, order)
+    log_weights = mx.take(top_vals, order)
+    bad = mx.logical_or(mx.any(mx.isnan(row)), mx.isinf(mx.max(row)))
     top_p = float(config.top_p or 1.0)
     if 0.0 < top_p < 1.0:
-        order = mx.argsort(-top_vals)
-        sv = mx.take(top_vals, order)
-        sp = mx.softmax(sv)
-        # nucleus keep-rule incl. the first probability that crosses top_p
+        # nucleus keep-rule incl. the first probability that crosses top_p,
+        # on the FULL-vocabulary softmax (the reference law), not the k-slice
+        log_total = mx.logsumexp(row.astype(mx.float32) * inv_temperature)
+        sp = mx.exp(log_weights - log_total)
         keep_n = mx.maximum(mx.sum((mx.cumsum(sp) - sp) < top_p), 1)
-        sv = mx.where(mx.arange(k) < keep_n, sv, mx.array(float("-inf")))
-        local = mx.random.categorical(sv[None], key=key)[0]
-        return mx.take(top_idx, mx.take(order, local))
-    local = mx.random.categorical(top_vals[None], key=key)[0]
-    return mx.take(top_idx, local)
+        log_weights = mx.where(
+            mx.arange(k) < keep_n, log_weights, mx.array(float("-inf"))
+        )
+    return ids, log_weights, bad
+
+
+def _mx_lazy_sample(row: mx.array, config: SamplerConfig, key: mx.array) -> mx.array:
+    """Device-side shaped sampling returning a LAZY scalar token array — the
+    pipelined-AR lane's sampler (shaping: :func:`_mx_lazy_shape`).
+
+    The randomness stream is mx.random keyed from the request seed instead
+    of the numpy generator, so runs stay deterministic per seed but the
+    streams differ. Callers gate on temperature > 0 and 1 < top_k < vocab.
+
+    A row with NaN or +inf (or all -inf) returns -1 instead of a token so the
+    lane raises NonFiniteLogitsError when it reads the value, rather than
+    emitting token 0 (``!``); the check rides the same lazy graph, so the
+    pipeline keeps its one sync per token.
+    """
+    ids, log_weights, bad = _mx_lazy_shape(row, config)
+    local = mx.random.categorical(log_weights[None], key=key)[0]
+    # argpartition ids are uint32; the sentinel needs a signed token
+    token = mx.take(ids, local).astype(mx.int32)
+    return mx.where(bad, mx.array(-1, dtype=mx.int32), token)
 
 
 def _greedy_draft_token_and_top_values(
@@ -6919,6 +6963,13 @@ def generate_ar(
                     target_eval_time += wait_elapsed
                     target_decode_time += build_elapsed + wait_elapsed
                     verify_calls += 1
+                    if v < 0:
+                        # _mx_lazy_sample's non-finite sentinel: the row that
+                        # produced this token carried NaN/inf.
+                        raise NonFiniteLogitsError(
+                            "non-finite logits in the pipelined AR lane at "
+                            f"output token {_lane_committed}"
+                        )
                     step = _lane_committed
                     tokens.append(v)
                     emit_token(v)
