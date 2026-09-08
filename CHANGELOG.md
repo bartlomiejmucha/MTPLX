@@ -136,6 +136,20 @@ All notable user-facing changes to MTPLX. The format is based on
   now built in row chunks (bit-identical result, no dense intermediate), a
   zeroed head is refused, and the install falls back to the resident target
   head as the drafter.
+- **A long agent turn stays warm across the model's own token seams.** A
+  model's sampled tokens are not always the canonical encoding of their own
+  text: in a Hermes session at effort xhigh the 27B wrote `"Nothing` as one
+  token 8,498 tokens into a write_file call where the tokenizer encodes `"`
+  then `Nothing`. The client's re-tokenized history then diverged from the
+  committed stream on identical bytes, the generation-final snapshot was
+  refused, the fallback re-prefill was preempted by the next request, and
+  that request re-prefilled the whole 29,842-token turn (30,038 tokens,
+  41 s to first token). Wherever the resent prompt and the session's
+  committed ids decode to the same text, the committed ids are now served
+  (a bounded window per seam, never across a real edit), on both the
+  request and the snapshot side; the request log carries `token_splice`
+  under `committed_reasoning_canonicalization`.
+  `MTPLX_COMMITTED_TOKEN_SPLICE=0` restores the old behaviour.
 - **A mid-conversation system message no longer rewrites message 0**
   (issue #477). Claude Code's per-turn `<system-reminder>` notes arrive as
   late system messages; hoisting them into the leading system message

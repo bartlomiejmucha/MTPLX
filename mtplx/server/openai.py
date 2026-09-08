@@ -13156,6 +13156,100 @@ def _common_prefix_len(a: Sequence[int], b: Sequence[int]) -> int:
     return n
 
 
+_COMMITTED_SPLICE_WINDOW = 8
+_COMMITTED_SPLICE_MAX_SPANS = 256
+
+
+def _splice_committed_token_ids(
+    prompt_ids: Sequence[int],
+    committed: Sequence[int],
+    tokenizer: Any,
+    *,
+    window: int = _COMMITTED_SPLICE_WINDOW,
+    max_spans: int = _COMMITTED_SPLICE_MAX_SPANS,
+) -> tuple[list[int], dict[str, Any]]:
+    """Re-express ``prompt_ids`` with the session's committed ids wherever the
+    two decode to the same text.
+
+    A model's sampled token sequence is not always the canonical BPE encoding
+    of its own text: the 2026-09-08 Hermes receipt had ``"Nothing`` emitted
+    as one token 8,498 tokens into a write_file call where the tokenizer
+    encodes ``"`` + ``Nothing``. The client's re-tokenized history then
+    diverges from the committed stream at that spot, the generation-final
+    snapshot is refused, and the next turn re-prefills the whole assistant
+    turn (30,038 tokens, 41 s TTFT). The bytes are identical; only the token
+    boundaries differ, and the KV state the model built belongs to its own
+    ids. At each divergence this walks a bounded window on both sides for
+    the shortest pair of token runs with the same decoded text and takes the
+    committed run; a window that does not re-synchronise (a real edit) ends
+    the splice and the rest of the prompt is kept as sent. Windows whose
+    text carries a replacement character (a split multi-byte character) are
+    never matched. Returns the ids and a receipt.
+    """
+
+    prompt = [int(token) for token in prompt_ids]
+    stream = [int(token) for token in committed]
+    receipt: dict[str, Any] = {"spans": 0, "tokens_in": 0, "tokens_out": 0}
+    if not prompt or not stream:
+        return prompt, receipt
+    common = _common_prefix_len(prompt, stream)
+    if common >= len(prompt) or common >= len(stream):
+        return prompt, receipt
+
+    def _text(ids: Sequence[int]) -> str | None:
+        try:
+            text = tokenizer.decode(list(ids))
+        except Exception:
+            return None
+        if not isinstance(text, str) or not text or "\ufffd" in text:
+            return None
+        return text
+
+    out: list[int] = prompt[:common]
+    p = common
+    c = common
+    spans = 0
+    while p < len(prompt) and c < len(stream):
+        if prompt[p] == stream[c]:
+            out.append(prompt[p])
+            p += 1
+            c += 1
+            continue
+        if spans >= max_spans:
+            break
+        found: tuple[int, int] | None = None
+        for total in range(2, 2 * window + 1):
+            for dp in range(1, min(window, total - 1) + 1):
+                dc = total - dp
+                if dc < 1 or dc > window:
+                    continue
+                if p + dp > len(prompt) or c + dc > len(stream):
+                    continue
+                left = _text(prompt[p : p + dp])
+                if left is None:
+                    continue
+                if left == _text(stream[c : c + dc]):
+                    found = (dp, dc)
+                    break
+            if found is not None:
+                break
+        if found is None:
+            break
+        dp, dc = found
+        out.extend(stream[c : c + dc])
+        receipt["tokens_in"] += dp
+        receipt["tokens_out"] += dc
+        spans += 1
+        p += dp
+        c += dc
+    out.extend(prompt[p:])
+    receipt["spans"] = spans
+    if spans:
+        receipt["first_divergence"] = int(common)
+        receipt["cp_after"] = int(_common_prefix_len(out, stream))
+    return out, receipt
+
+
 class _CommittedTurn(tuple):
     """``(think_interior, gate, tool_markup)`` plus the exact post-think body.
 
@@ -13628,7 +13722,13 @@ def _maybe_canonicalize_committed_reasoning(
         return None
     committed_turns = _committed_assistant_turns(committed_text)
     if not any(interior for interior, _gate, _markup in committed_turns):
-        return None
+        spliced = _splice_prompt_onto_committed(
+            state, messages, prompt_ids, committed, cp_raw, outcome
+        )
+        if spliced is not None:
+            _record(template_observability)
+            _record(request_observability)
+        return spliced
 
     canon_messages, substituted = _substitute_committed_reasoning_messages(
         messages,
@@ -13638,9 +13738,12 @@ def _maybe_canonicalize_committed_reasoning(
     outcome["turns_substituted"] = int(substituted)
 
     if substituted == 0:
+        spliced = _splice_prompt_onto_committed(
+            state, messages, prompt_ids, committed, cp_raw, outcome
+        )
         _record(template_observability)
         _record(request_observability)
-        return None
+        return spliced
     canon_observability: dict[str, Any] = {}
     canon_ids = _encode_messages(
         state.runtime.tokenizer,
@@ -13659,15 +13762,56 @@ def _maybe_canonicalize_committed_reasoning(
     cp_canon = _common_prefix_len(canon_ids, committed)
     outcome["cp_canon"] = int(cp_canon)
     if cp_canon <= cp_raw:
+        spliced = _splice_prompt_onto_committed(
+            state, messages, prompt_ids, committed, cp_raw, outcome
+        )
         _record(template_observability)
         _record(request_observability)
-        return None
+        return spliced
     outcome["applied"] = True
     template_observability.clear()
     template_observability.update(canon_observability)
+    # The substituted encode can still carry a non-canonical spot of the
+    # model's own making inside the bytes it just put back; splice past it.
+    spliced = _splice_prompt_onto_committed(
+        state, canon_messages, canon_ids, committed, cp_canon, outcome
+    )
     _record(template_observability)
     _record(request_observability)
+    if spliced is not None:
+        return spliced
     return canon_messages, canon_ids
+
+
+def _splice_prompt_onto_committed(
+    state: ServerState,
+    messages: list[ChatMessage],
+    prompt_ids: Sequence[int],
+    committed: Sequence[int],
+    cp_before: int,
+    outcome: dict[str, Any],
+) -> tuple[list[ChatMessage], list[int]] | None:
+    """Serve the committed ids for text-identical spans (see
+    ``_splice_committed_token_ids``); None when nothing improved."""
+    if not _committed_token_splice_enabled():
+        return None
+    spliced_ids, receipt = _splice_committed_token_ids(
+        prompt_ids, committed, state.runtime.tokenizer
+    )
+    if not receipt.get("spans"):
+        return None
+    cp_after = int(receipt.get("cp_after") or 0)
+    outcome["token_splice"] = receipt
+    if cp_after <= int(cp_before):
+        return None
+    outcome["applied"] = True
+    outcome["cp_spliced"] = cp_after
+    return list(messages), spliced_ids
+
+
+def _committed_token_splice_enabled() -> bool:
+    raw = str(os.environ.get("MTPLX_COMMITTED_TOKEN_SPLICE", "1")).strip().lower()
+    return raw not in {"0", "false", "off", "no"}
 
 
 def _qwen_plain_assistant_content_boundaries(rendered: str) -> list[int]:
@@ -21552,6 +21696,36 @@ def _generation_final_postcommit_compatibility(
                 "token_ids": bank_ids,
                 "history_suffix_tokens": len(history_ids) - len(final_token_ids),
             }
+    if _committed_token_splice_enabled():
+        spliced_history, splice_receipt = _splice_committed_token_ids(
+            history_ids, final_token_ids, state.runtime.tokenizer
+        )
+        if splice_receipt.get("spans"):
+            if spliced_history == final_token_ids:
+                bank_ids = _bank_view(final_token_ids)
+                if bank_ids is not None:
+                    return {
+                        "safe": True,
+                        "mode": "generation_final_exact",
+                        "reason": "token_identical_after_splice",
+                        "token_ids": bank_ids,
+                        "history_suffix_tokens": 0,
+                        "token_splice": splice_receipt,
+                    }
+            if (
+                len(spliced_history) >= len(final_token_ids)
+                and spliced_history[: len(final_token_ids)] == final_token_ids
+            ):
+                bank_ids = _bank_view(final_token_ids)
+                if bank_ids is not None:
+                    return {
+                        "safe": True,
+                        "mode": "generation_final_prefix",
+                        "reason": "generation_boundary_prefix_of_history_after_splice",
+                        "token_ids": bank_ids,
+                        "history_suffix_tokens": len(spliced_history) - len(final_token_ids),
+                        "token_splice": splice_receipt,
+                    }
     reason = "retokenized_history_mismatch"
     divergence = _first_divergence(final_token_ids, history_ids)
     _dump_postcommit_mismatch(
