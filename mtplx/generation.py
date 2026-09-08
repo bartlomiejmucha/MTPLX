@@ -10811,6 +10811,22 @@ def generate_mtpk(
                     if family_capture_commit_active
                     else contextlib.nullcontext()
                 )
+                # Reserve the block's rows before the forward: the fixed-M4
+                # bank's window for its QSA entries, and the dense fixed
+                # buffers for everything else. A restored entry carries only
+                # its step rounding as slack, and the first rounds after a
+                # restore can be copy rounds, so the block used to overrun
+                # the buffer (clamped silently before the in-place write).
+                if compiled_verify_bank is not None:
+                    compiled_verify_bank.reserve_fixed_m4_window(
+                        cache,
+                        committed_count=len(tokens) - 1,
+                        window_tokens=_cb_T,
+                    )
+                _cb_grown = ensure_eager_window_capacity(cache, _cb_T)
+                if _cb_grown:
+                    ccopy_capacity_growths += 1
+                    event["ccopy_capacity_growth"] = int(_cb_grown)
                 started_forward = time.perf_counter()
                 with (
                     attention_phase("decode_verify"),
