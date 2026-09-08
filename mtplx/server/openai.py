@@ -15936,6 +15936,9 @@ def _metrics_envelope(
             stats.get("context_copy_accepted_tokens") or 0
         ),
         "context_copy_suspensions": int(stats.get("context_copy_suspensions") or 0),
+        "context_copy_capacity_growths": int(
+            stats.get("context_copy_capacity_growths") or 0
+        ),
         "context_copy_disabled_reason": stats.get("context_copy_disabled_reason"),
         "verify_joint_eval_time_s": float(stats.get("verify_joint_eval_time_s") or 0.0),
         "verify_target_distribution_time_s": float(
@@ -19689,6 +19692,7 @@ PUBLIC_MTPLX_STATS_KEYS = (
     "context_copy_accepted_blocks",
     "context_copy_accepted_tokens",
     "context_copy_suspensions",
+    "context_copy_capacity_growths",
     "context_copy_suspended",
     "context_copy_backoff_tokens",
     "context_copy_disabled_reason",

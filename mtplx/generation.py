@@ -2726,6 +2726,7 @@ class GenerationStats:
     context_copy_accepted_blocks: int = 0
     context_copy_accepted_tokens: int = 0
     context_copy_suspensions: int = 0
+    context_copy_capacity_growths: int = 0
     context_copy_suspended: bool = False
     context_copy_backoff_tokens: int = 0
     context_copy_disabled_reason: str | None = None
@@ -9860,6 +9861,7 @@ def generate_mtpk(
     )
     ccopy_rounds = ccopy_drafted = ccopy_accepted = 0
     ccopy_probes = ccopy_blocks_accepted = ccopy_suspensions = 0
+    ccopy_capacity_growths = 0
     ccopy_disabled_reason = None
     if _ccopy_whole_moe_conflict:
         # Requested the target_prefix takeover but whole-MoE is installed:
@@ -10517,9 +10519,8 @@ def generate_mtpk(
                         # end (functional clamp) or failed the write.
                         _cc_grown = ensure_eager_window_capacity(cache, _cc_T)
                         if _cc_grown:
-                            event["ccopy_capacity_growths"] = (
-                                int(event.get("ccopy_capacity_growths", 0)) + 1
-                            )
+                            ccopy_capacity_growths += 1
+                            event["ccopy_capacity_growth"] = int(_cc_grown)
                         _cc_logits, _cc_hidden, _cc_captures = rt.forward_ar_capture(
                             mx.array([[primary] + _cc_block]),
                             cache=cache,
@@ -13687,6 +13688,7 @@ def generate_mtpk(
         context_copy_accepted_blocks=ccopy_blocks_accepted,
         context_copy_accepted_tokens=ccopy_accepted,
         context_copy_suspensions=ccopy_suspensions,
+        context_copy_capacity_growths=ccopy_capacity_growths,
         context_copy_suspended=len(tokens) < ccopy_suspend_until,
         context_copy_backoff_tokens=ccopy_backoff if ccopy_index is not None else 0,
         context_copy_disabled_reason=ccopy_disabled_reason,
