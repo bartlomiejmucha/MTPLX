@@ -61,6 +61,14 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
+- **A reply's own whitespace no longer breaks its warm restore.** The
+  visible content of a reply is served with its leading and trailing
+  whitespace removed, so a client's echo could never carry the model's
+  own whitespace tokens; a turn cut by the token budget after a newline
+  came back with the end-of-turn marker where the newline was, the
+  exactness rule refused the restore and the next request re-prefilled
+  the whole turn. The committed-id splice now puts the model's own
+  whitespace back, and it also runs when thinking is off.
 - **Copied blocks at the verify cache's growth edge kept their rows.** On
   the 27B family the context-copy lane verified a copied block through the
   fixed-capacity buffers of the compiled verify; a block that straddled a
