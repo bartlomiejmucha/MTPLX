@@ -1171,6 +1171,22 @@ def test_pull_explains_unavailable_model_root(tmp_path: Path):
     assert not root.exists()
 
 
+def test_pull_explains_model_root_symlink_to_unmounted_volume(tmp_path: Path):
+    # The #466 layout: the cache is a symlink onto an external drive. With
+    # the drive unplugged the link dangles and mkdir raised FileExistsError
+    # for the link itself; the error must say the target volume is missing.
+    link = tmp_path / "models"
+    target = tmp_path / "unplugged" / "models"
+    link.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="is not available") as excinfo:
+        pull_model("mtplx/example", cache_dir=link)
+
+    assert str(target) in str(excinfo.value)
+    assert "not mounted" in str(excinfo.value)
+    assert link.is_symlink() and not target.exists()
+
+
 def test_pull_rejects_unsafe_filename_before_snapshot_write(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         "mtplx.hf_loader._query_repo_snapshot",

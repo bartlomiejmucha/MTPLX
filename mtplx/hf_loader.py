@@ -343,6 +343,14 @@ def ensure_model_root(root: str | Path) -> Path:
     """
 
     path = Path(root).expanduser()
+    if path.is_symlink() and not path.exists():
+        # The #466 layout: ~/.mtplx/models is a symlink onto an external
+        # drive. Unplugged, mkdir raises FileExistsError for the link itself.
+        raise RuntimeError(
+            f"model directory {path} is not available: it links to "
+            f"{os.readlink(path)}, whose volume is not mounted. Reconnect the "
+            "drive or choose another model directory."
+        )
     try:
         path.mkdir(parents=True, exist_ok=True)
     except PermissionError as exc:
