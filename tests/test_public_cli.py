@@ -1685,7 +1685,8 @@ def test_serve_forwards_retrieval_flags_to_the_server_command(
     # Retrieval references are validated before launch now, so they have to
     # resolve for the forwarding itself to be reachable.
     monkeypatch.setattr(
-        "mtplx.hf_loader.resolve_model_path", lambda ref, cache_dir=None: model_dir
+        "mtplx.hf_loader.resolve_model_path",
+        lambda ref, cache_dir=None, search_dirs=None: model_dir,
     )
     payload = _serve_dry_run_payload_for_model(
         monkeypatch,
@@ -1762,7 +1763,8 @@ def test_serve_does_not_grant_remote_code_trust_by_default(
     model_dir = tmp_path / "example-model"
     model_dir.mkdir()
     monkeypatch.setattr(
-        "mtplx.hf_loader.resolve_model_path", lambda ref, cache_dir=None: model_dir
+        "mtplx.hf_loader.resolve_model_path",
+        lambda ref, cache_dir=None, search_dirs=None: model_dir,
     )
     payload = _serve_dry_run_payload_for_model(
         monkeypatch,
