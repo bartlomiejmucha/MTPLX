@@ -13309,6 +13309,8 @@ class _CommittedTurn(tuple):
 
 def _committed_assistant_turns(
     committed_text: str,
+    *,
+    gemma4: bool | None = None,
 ) -> list[tuple[str | None, str, str]]:
     """Per assistant turn of a decoded committed stream, in order:
     (think_interior, visible_content_gate, tool_call_markup).
@@ -13327,7 +13329,11 @@ def _committed_assistant_turns(
     ChatML assistant turns and ``<think>`` tags; both shapes reduce to this
     same positional representation.
     """
-    gemma4 = _COMMITTED_GEMMA4_TURN_OPEN in committed_text
+    if gemma4 is None:
+        # Callers that know the runtime pass its parser (a Qwen stream that
+        # merely quotes a Gemma turn marker must not flip the parser); the
+        # marker sniff is the fallback for bare text.
+        gemma4 = _COMMITTED_GEMMA4_TURN_OPEN in committed_text
     turn_open = _COMMITTED_GEMMA4_TURN_OPEN if gemma4 else _COMMITTED_TURN_OPEN
     turn_close = _COMMITTED_GEMMA4_TURN_CLOSE if gemma4 else _COMMITTED_TURN_CLOSE
     think_open = _COMMITTED_GEMMA4_THINK_OPEN if gemma4 else _COMMITTED_THINK_OPEN
@@ -13790,7 +13796,10 @@ def _maybe_canonicalize_committed_reasoning(
         committed_text = state.runtime.tokenizer.decode(list(committed))
     except Exception:
         return None
-    committed_turns = _committed_assistant_turns(committed_text)
+    committed_turns = _committed_assistant_turns(
+        committed_text,
+        gemma4=_reasoning_parser_for_state(state) == "gemma4",
+    )
     if not any(interior for interior, _gate, _markup in committed_turns):
         spliced = _splice_prompt_onto_committed(
             state, messages, prompt_ids, committed, cp_raw, outcome
@@ -20578,7 +20587,20 @@ def _bank_history_policy(state: "ServerState") -> str:
     whole prompt on every top-level turn (#465: 14.5k tokens, ~2 minutes per
     turn on an M1 Max; the idle stall in #455 on an M3 Ultra). One answer per
     runtime, derived here, used everywhere.
+
+    A backend that banks a different history shape declares it on its
+    descriptor and its restore side asks for that same string: Gemma 4's
+    ``assistant_shared_kv`` (the assistant reads the shared KV carried in
+    ``extra_state``; there is no committed MTP-history cache). Until PR #283
+    every server put site banked Gemma 4 under the Qwen strings while the
+    backend restored under its own, so no Gemma 4 turn ever restored warm.
     """
+    declared = str(
+        getattr(getattr(state, "backend_descriptor", None), "mtp_history_policy", "")
+        or ""
+    )
+    if declared and declared != "committed":
+        return declared
     runtime = getattr(state, "runtime", None)
     return "committed" if bool(getattr(runtime, "mtp_enabled", True)) else "cycle"
 
@@ -21561,7 +21583,10 @@ def _history_ids_for_postcommit(
         except Exception:
             committed_text = ""
         if committed_text:
-            committed_turns = _committed_assistant_turns(committed_text)
+            committed_gemma4 = _reasoning_parser_for_state(state) == "gemma4"
+            committed_turns = _committed_assistant_turns(
+                committed_text, gemma4=committed_gemma4
+            )
             # F11 #3 follow-up (founder-session receipt 2026-08-21): the
             # request-local stream renders an EMPTY think interior for any
             # history turn the committed-reasoning gate could not
@@ -21578,7 +21603,9 @@ def _history_ids_for_postcommit(
                 except Exception:
                     session_text = ""
                 if session_text:
-                    session_turns = _committed_assistant_turns(session_text)
+                    session_turns = _committed_assistant_turns(
+                        session_text, gemma4=committed_gemma4
+                    )
                     committed_turns = [
                         (
                             session_turns[index]
@@ -21897,31 +21924,40 @@ def _dump_postcommit_mismatch(
         pass
 
 
+def _bank_backend_id(state: ServerState) -> str:
+    """The backend whose restore side the bank identity strings must match."""
+    return str(
+        getattr(getattr(state, "backend_descriptor", None), "backend_id", "")
+        or getattr(getattr(state, "runtime", None), "backend_id", "")
+    )
+
+
 def _generation_final_bank_metadata(
     state: ServerState,
     final_state: Any,
     *,
     token_count: int,
 ) -> dict[str, Any]:
-    backend_id = str(
-        getattr(getattr(state, "backend_descriptor", None), "backend_id", "")
-        or getattr(getattr(state, "runtime", None), "backend_id", "")
-    )
-    if backend_id == GEMMA4_BACKEND:
-        return {
-            "hidden_variant": "gemma4_pre_norm",
-            "mtp_history_policy": "assistant_shared_kv",
-            "mtp_history_snapshot": None,
-            "mtp_snapshot_epoch": None,
-        }
+    """Bank identity and MTP-history payload for a generation-final put.
+
+    One identity per runtime, the one its restore side asks for: Gemma 4
+    restores its pre-norm hidden state under ``gemma4_pre_norm`` and carries
+    no committed MTP history (its assistant reads the shared KV in
+    ``extra_state``); every other runtime banks ``post_norm``. The history
+    policy is never a literal here: ``_bank_history_policy`` is the one
+    answer per runtime (#465 -- an AR-only runtime banks under ``cycle`` and
+    is looked up under ``cycle``).
+    """
+    backend_id = _bank_backend_id(state)
+    committed_mtp_cache = getattr(final_state, "final_committed_mtp_cache", None)
     mtp_snapshot = (
-        snapshot_cache(final_state.final_committed_mtp_cache)
-        if final_state.final_committed_mtp_cache is not None
-        else None
+        snapshot_cache(committed_mtp_cache) if committed_mtp_cache is not None else None
     )
     return {
-        "hidden_variant": "post_norm",
-        "mtp_history_policy": "committed",
+        "hidden_variant": (
+            "gemma4_pre_norm" if backend_id == GEMMA4_BACKEND else "post_norm"
+        ),
+        "mtp_history_policy": _bank_history_policy(state),
         "mtp_history_snapshot": mtp_snapshot,
         "mtp_snapshot_epoch": token_count if mtp_snapshot is not None else None,
     }
@@ -21931,10 +21967,7 @@ def _generation_final_prompt_boundary_available(
     state: ServerState,
     final_state: Any,
 ) -> bool:
-    backend_id = str(
-        getattr(getattr(state, "backend_descriptor", None), "backend_id", "")
-        or getattr(getattr(state, "runtime", None), "backend_id", "")
-    )
+    backend_id = _bank_backend_id(state)
     return bool(
         backend_id == GEMMA4_BACKEND
         and getattr(final_state, "prompt_boundary_cache", None) is not None
@@ -21961,10 +21994,7 @@ def _generation_final_bank_values(
     prompt_ids: Sequence[int],
     final_token_ids: Sequence[int],
 ) -> dict[str, Any]:
-    backend_id = str(
-        getattr(getattr(state, "backend_descriptor", None), "backend_id", "")
-        or getattr(getattr(state, "runtime", None), "backend_id", "")
-    )
+    backend_id = _bank_backend_id(state)
     prompt_cache = getattr(final_state, "prompt_boundary_cache", None)
     if backend_id == GEMMA4_BACKEND and prompt_cache is not None:
         return {
