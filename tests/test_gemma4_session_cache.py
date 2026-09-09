@@ -304,14 +304,17 @@ def test_gemma4_two_turn_memory_rewrite_restores_common_prefix_with_cold_parity(
         require_shared_kv=True,
     )
 
+    # The bank lands the KV one slot short of the common prefix (the
+    # seed-forward slot, as generation._restore_near_prefix consumes it); the
+    # seed token leads the divergent tail through one forward.
     assert warm.cache_hit is True
-    assert warm.cached_tokens == common
-    assert warm.suffix_tokens == len(second_prompt) - common
+    assert warm.cached_tokens == common - 1
+    assert warm.suffix_tokens == len(second_prompt) - (common - 1)
     assert warm.logits == cold.logits
     assert warm.hidden == cold.hidden
     assert warm.shared_kv_states == cold.shared_kv_states
     assert warm.kv_offset == cold.kv_offset == len(second_prompt)
     assert prefill_calls == [
         tuple(second_prompt),
-        tuple(second_prompt[common:]),
+        tuple(second_prompt[common - 1 :]),
     ]

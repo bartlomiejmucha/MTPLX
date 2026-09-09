@@ -1309,16 +1309,20 @@ class Gemma4RollbackRotatingKVCache:
                     return n_tokens
                 if last.get("kind") == "in_place":
                     mx = _require_mlx_core()
+                    # slice_update takes its start as an array (as the
+                    # matching mx.slice in _save_in_place_update already
+                    # passes it); a Python int raises TypeError.
+                    start_index = mx.array(int(last["start"]), dtype=mx.int32)
                     self.keys = mx.slice_update(
                         self.keys,
                         last["old_keys"],
-                        int(last["start"]),
+                        start_index,
                         axes=(2,),
                     )
                     self.values = mx.slice_update(
                         self.values,
                         last["old_values"],
-                        int(last["start"]),
+                        start_index,
                         axes=(2,),
                     )
                     self.offset = int(last["offset"])
@@ -1327,9 +1331,44 @@ class Gemma4RollbackRotatingKVCache:
                     self._replay_committed_prefix(update_keys, update_values, committed)
                     return n_tokens
 
+        # No exact last-update rollback covers this trim: it is the session
+        # bank restoring a prompt-boundary buffer to an earlier prefix (or a
+        # rollback deeper than the last block). The sliding buffer is a
+        # window, not a history, so the trim is exact only when every row the
+        # next forward attends to is still physically present, in temporal
+        # order. Otherwise refuse (return 0): the bank's trim helpers fail
+        # closed to a cold prefill. The old fall-through moved offset/_idx
+        # back and left the trimmed rows in place, where the next in-place
+        # step's front trim and the next concat's temporal rotation both
+        # counted them as history -- silently wrong sliding-window KV on a
+        # one-token suffix, and on any restore deeper than the last warm
+        # turn's suffix.
         n_tokens = min(int(self.offset), n_tokens)
-        self.offset -= n_tokens
-        self._idx = max(self.keep, int(self._idx) - n_tokens)
+        if n_tokens <= 0 or self.keys is None:
+            return 0
+        rows = int(self.keys.shape[2])
+        if self.keep != 0 or int(self._idx) != rows:
+            # A circular buffer (in-place decode has wrapped) or a kept
+            # prefix: the newest rows are not the physical tail.
+            return 0
+        remaining = min(int(self.offset), rows) - n_tokens
+        new_offset = int(self.offset) - n_tokens
+        if remaining != new_offset and remaining < self.max_size:
+            # Partial history (a warm turn's buffer holds max_size-1 window
+            # rows plus that turn's suffix) that would leave less than a
+            # full window before the restore point.
+            return 0
+        if remaining <= 0:
+            self.keys = None
+            self.values = None
+            self.offset = 0
+            self._idx = 0
+            self._last_update = None
+            return n_tokens
+        self.keys = self.keys[..., :remaining, :]
+        self.values = self.values[..., :remaining, :]
+        self.offset = new_offset
+        self._idx = remaining
         self._last_update = None
         return n_tokens
 
@@ -2592,62 +2631,51 @@ def _restore_or_prefill_gemma4_prompt(
         policy_fingerprint=session_policy_fingerprint,
     )
     if restored is None:
+        # The prompt diverges from every banked prefix (a rewritten volatile
+        # suffix, a re-rendered turn). Restore the longest compatible common
+        # prefix and prefill only the divergent tail, the way the Qwen path
+        # does in generation._restore_near_prefix: the bank lands the KV one
+        # slot short of the restore point (the seed-forward slot), that seed
+        # token leads the tail forward, so the forward always carries at
+        # least two tokens and takes the sliding-window cache's concat path.
         candidates = getattr(session_bank, "near_prefix_candidates", None)
         restore_prefix = getattr(session_bank, "restore_entry_prefix_cache", None)
         if callable(candidates) and callable(restore_prefix):
-            try:
-                near_matches = candidates(
-                    prompt_ids,
-                    model_path=str(runtime.model_path),
-                    mtp_enabled=bool(runtime.mtp_enabled),
-                    hidden_variant="gemma4_pre_norm",
-                    template_hash=session_template_hash,
-                    mtp_history_policy=GEMMA4_SESSION_STATE_POLICY,
-                    draft_head_identity=session_draft_head_identity,
-                    policy_fingerprint=session_policy_fingerprint,
-                )
-            except Exception:
-                near_matches = []
-            for entry, matched in near_matches:
+            from mtplx.session_bank import _restore_identity_compatible
+
+            for entry, matched in candidates(
+                prompt_ids,
+                model_path=str(runtime.model_path),
+                mtp_enabled=bool(runtime.mtp_enabled),
+                hidden_variant="gemma4_pre_norm",
+                template_hash=session_template_hash,
+                mtp_history_policy=GEMMA4_SESSION_STATE_POLICY,
+                draft_head_identity=session_draft_head_identity,
+                policy_fingerprint=session_policy_fingerprint,
+            ):
                 matched = int(matched)
                 if (
                     matched < 2
                     or matched >= int(getattr(entry, "prefix_len", 0) or 0)
                     or matched >= len(prompt_ids)
-                    or str(getattr(entry, "model_path", ""))
-                    != str(runtime.model_path)
-                    or bool(getattr(entry, "mtp_enabled", False))
-                    != bool(runtime.mtp_enabled)
-                    or getattr(entry, "hidden_variant", None) != "gemma4_pre_norm"
-                    or (
-                        session_template_hash is not None
-                        and getattr(entry, "template_hash", None)
-                        != session_template_hash
-                    )
-                    or getattr(entry, "mtp_history_policy", None)
-                    != GEMMA4_SESSION_STATE_POLICY
-                    or (
-                        session_draft_head_identity is not None
-                        and getattr(entry, "draft_head_identity", None)
-                        != session_draft_head_identity
-                    )
-                    or (
-                        session_policy_fingerprint is not None
-                        and getattr(entry, "policy_fingerprint", None)
-                        != session_policy_fingerprint
+                    or not _restore_identity_compatible(
+                        entry,
+                        model_path=str(runtime.model_path),
+                        mtp_enabled=bool(runtime.mtp_enabled),
+                        hidden_variant="gemma4_pre_norm",
+                        template_hash=session_template_hash,
+                        mtp_history_policy=GEMMA4_SESSION_STATE_POLICY,
+                        draft_head_identity=session_draft_head_identity,
+                        policy_fingerprint=session_policy_fingerprint,
                     )
                 ):
                     continue
-                try:
-                    prefix_restore = restore_prefix(
-                        runtime,
-                        entry,
-                        matched,
-                        mode=session_restore_mode,
-                        full_boundary=True,
-                    )
-                except Exception:
-                    prefix_restore = None
+                prefix_restore = restore_prefix(
+                    runtime,
+                    entry,
+                    matched,
+                    mode=session_restore_mode,
+                )
                 if prefix_restore is None:
                     continue
                 boundary_hidden = None
@@ -2661,12 +2689,16 @@ def _restore_or_prefill_gemma4_prompt(
                     cache, _history, storage_mode = prefix_restore
                     restore_point = matched
                 restore_point = int(restore_point)
-                prefill_start = restore_point
-                if prefill_start < 0 or prefill_start >= len(prompt_ids):
+                if boundary_hidden is not None or restore_point != matched:
+                    # Boundary-true restores exist for recurrent entries.
+                    # Gemma 4 caches are all trimmable attention KV; a bank
+                    # that lands anywhere but the requested prefix is not
+                    # speaking this contract. Fail closed to the next one.
                     continue
+                seed = restore_point - 1
                 output, _suffix_elapsed = _gemma4_prefill_prompt(
                     runtime,
-                    list(prompt_ids[prefill_start:]),
+                    list(prompt_ids[seed:]),
                     cache=cache,
                     phase="prefill",
                 )
@@ -2679,8 +2711,8 @@ def _restore_or_prefill_gemma4_prompt(
                     shared_kv_states=output.shared_kv_states,
                     kv_offset=int(output.cache_offset),
                     prompt_eval_time_s=time.perf_counter() - started,
-                    cached_tokens=restore_point,
-                    suffix_tokens=len(prompt_ids) - restore_point,
+                    cached_tokens=seed,
+                    suffix_tokens=len(prompt_ids) - seed,
                     cache_hit=True,
                     cache_miss_reason=None,
                     restore_mode=f"block_prefix_{storage_mode}",
