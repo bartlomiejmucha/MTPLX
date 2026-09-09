@@ -14947,6 +14947,14 @@ def _json_safe(value: Any) -> Any:
         return {str(key): _json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        # JSON has no inf or nan. FastAPI's encoder already turns them into
+        # null on the routes; the SSE stream and the request log serialize
+        # with json.dumps directly and emitted the bare Infinity/NaN tokens
+        # a browser's JSON.parse rejects (MTPLX_SESSION_BANK_IDLE_TTL_S=0
+        # makes the bank's idle_ttl_s infinite, and with it every dashboard
+        # snapshot event was unparseable).
+        return None
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     try:
