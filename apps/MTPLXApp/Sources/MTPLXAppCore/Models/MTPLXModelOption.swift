@@ -939,7 +939,7 @@ public struct MTPLXModelOption: Codable, Equatable, Identifiable, Sendable {
                 id: "local:\(local.path)",
                 displayName: local.displayName,
                 shortName: local.displayName,
-                detail: "Local MTPLX model in a configured library.",
+                detail: tr("Local MTPLX model in a configured library."),
                 hfModelID: local.reference,
                 localCandidates: [local.path],
                 aliases: [local.reference, local.path]

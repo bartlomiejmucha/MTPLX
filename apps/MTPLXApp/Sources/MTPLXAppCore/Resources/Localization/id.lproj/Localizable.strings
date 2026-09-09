@@ -1578,3 +1578,15 @@
 "Ready. Open the dashboard to save this setup." = "Siap. Buka dashboard untuk menyimpan penyiapan ini.";
 "Retry verify" = "Coba verifikasi lagi";
 "Use it now" = "Gunakan sekarang";
+"Model libraries" = "Pustaka model";
+"Downloads and Forge write to the primary folder. Additional folders are searched in order." = "Unduhan dan Forge menulis ke folder utama. Folder tambahan dicari secara berurutan.";
+"Primary" = "Utama";
+"Additional %lld" = "Tambahan %lld";
+"Choose" = "Pilih";
+"Available" = "Tersedia";
+"Unavailable" = "Tidak tersedia";
+"Add folder" = "Tambah folder";
+"Add" = "Tambah";
+"Choose one or more model folders to search." = "Pilih satu atau beberapa folder model untuk dicari.";
+"Choose the folder for downloads and Forge output." = "Pilih folder untuk unduhan dan keluaran Forge.";
+"Local MTPLX model in a configured library." = "Model MTPLX lokal di pustaka yang dikonfigurasi.";

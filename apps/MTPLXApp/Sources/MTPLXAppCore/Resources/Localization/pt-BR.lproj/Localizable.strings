@@ -1578,3 +1578,15 @@
 "Ready. Open the dashboard to save this setup." = "Pronto. Abra o dashboard para salvar esta configuração.";
 "Retry verify" = "Repetir verificação";
 "Use it now" = "Usar agora";
+"Model libraries" = "Bibliotecas de modelos";
+"Downloads and Forge write to the primary folder. Additional folders are searched in order." = "Downloads e o Forge gravam na pasta principal. As pastas adicionais são pesquisadas em ordem.";
+"Primary" = "Principal";
+"Additional %lld" = "Adicional %lld";
+"Choose" = "Escolher";
+"Available" = "Disponível";
+"Unavailable" = "Indisponível";
+"Add folder" = "Adicionar pasta";
+"Add" = "Adicionar";
+"Choose one or more model folders to search." = "Escolha uma ou mais pastas de modelos para pesquisar.";
+"Choose the folder for downloads and Forge output." = "Escolha a pasta para downloads e saída do Forge.";
+"Local MTPLX model in a configured library." = "Modelo MTPLX local em uma biblioteca configurada.";

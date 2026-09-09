@@ -1578,3 +1578,15 @@
 "Ready. Open the dashboard to save this setup." = "Готово. Откройте панель управления, чтобы сохранить эту конфигурацию.";
 "Retry verify" = "Повторить проверку";
 "Use it now" = "Использовать сейчас";
+"Model libraries" = "Библиотеки моделей";
+"Downloads and Forge write to the primary folder. Additional folders are searched in order." = "Загрузки и Forge записывают в основную папку. Дополнительные папки просматриваются по порядку.";
+"Primary" = "Основная";
+"Additional %lld" = "Дополнительная %lld";
+"Choose" = "Выбрать";
+"Available" = "Доступна";
+"Unavailable" = "Недоступна";
+"Add folder" = "Добавить папку";
+"Add" = "Добавить";
+"Choose one or more model folders to search." = "Выберите одну или несколько папок с моделями для поиска.";
+"Choose the folder for downloads and Forge output." = "Выберите папку для загрузок и результатов Forge.";
+"Local MTPLX model in a configured library." = "Локальная модель MTPLX в настроенной библиотеке.";

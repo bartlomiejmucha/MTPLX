@@ -1441,15 +1441,15 @@ struct SettingsTab: View {
     @ViewBuilder
     private var modelLibraryCard: some View {
         Card(
-            "Model libraries",
-            subtitle: "Downloads and Forge write to the primary folder. Additional folders are searched in order."
+            tr("Model libraries"),
+            subtitle: tr("Downloads and Forge write to the primary folder. Additional folders are searched in order.")
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 modelDirectoryRow(
-                    title: "Primary",
+                    title: tr("Primary"),
                     path: draftConfig.primaryModelDirectory
                 ) {
-                    Button("Choose") { choosePrimaryModelDirectory() }
+                    Button(tr("Choose")) { choosePrimaryModelDirectory() }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
@@ -1462,7 +1462,7 @@ struct SettingsTab: View {
                     Array(draftConfig.additionalModelDirectories.enumerated()),
                     id: \.offset
                 ) { index, path in
-                    modelDirectoryRow(title: "Additional \(index + 1)", path: path) {
+                    modelDirectoryRow(title: tr("Additional %lld", index + 1), path: path) {
                         HStack(spacing: 4) {
                             Button {
                                 moveAdditionalModelDirectory(from: index, by: -1)
@@ -1491,7 +1491,7 @@ struct SettingsTab: View {
                 Button {
                     addModelDirectories()
                 } label: {
-                    Label("Add folder", systemImage: "plus")
+                    Label(tr("Add folder"), systemImage: "plus")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -1511,7 +1511,7 @@ struct SettingsTab: View {
                 HStack(spacing: 5) {
                     Text(title).font(.callout.weight(.medium))
                     Label(
-                        available ? "Available" : "Unavailable",
+                        available ? tr("Available") : tr("Unavailable"),
                         systemImage: available ? "checkmark.circle.fill" : "externaldrive.badge.questionmark"
                     )
                     .font(.caption)
@@ -1556,10 +1556,10 @@ struct SettingsTab: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = allowsMultipleSelection
         panel.canCreateDirectories = true
-        panel.prompt = allowsMultipleSelection ? "Add" : "Use"
+        panel.prompt = allowsMultipleSelection ? tr("Add") : tr("Use")
         panel.message = allowsMultipleSelection
-            ? "Choose one or more model folders to search."
-            : "Choose the folder for downloads and Forge output."
+            ? tr("Choose one or more model folders to search.")
+            : tr("Choose the folder for downloads and Forge output.")
         return panel
     }
     #endif

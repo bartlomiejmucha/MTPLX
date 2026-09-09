@@ -1578,3 +1578,15 @@
 "Ready. Open the dashboard to save this setup." = "준비됨. 대시보드를 열어 이 설정을 저장하세요.";
 "Retry verify" = "검증 재시도";
 "Use it now" = "지금 사용";
+"Model libraries" = "모델 라이브러리";
+"Downloads and Forge write to the primary folder. Additional folders are searched in order." = "다운로드와 Forge는 기본 폴더에 기록합니다. 추가 폴더는 순서대로 검색됩니다.";
+"Primary" = "기본";
+"Additional %lld" = "추가 %lld";
+"Choose" = "선택";
+"Available" = "사용 가능";
+"Unavailable" = "사용 불가";
+"Add folder" = "폴더 추가";
+"Add" = "추가";
+"Choose one or more model folders to search." = "검색할 모델 폴더를 하나 이상 선택하십시오.";
+"Choose the folder for downloads and Forge output." = "다운로드와 Forge 출력을 위한 폴더를 선택하십시오.";
+"Local MTPLX model in a configured library." = "구성된 라이브러리에 있는 로컬 MTPLX 모델입니다.";

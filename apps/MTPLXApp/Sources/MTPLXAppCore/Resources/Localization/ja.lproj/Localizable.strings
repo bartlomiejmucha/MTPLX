@@ -1578,3 +1578,15 @@
 "Ready. Open the dashboard to save this setup." = "準備完了。ダッシュボードを開いて、この設定を保存してください。";
 "Retry verify" = "検証を再試行";
 "Use it now" = "今すぐ使用";
+"Model libraries" = "モデルライブラリ";
+"Downloads and Forge write to the primary folder. Additional folders are searched in order." = "ダウンロードとForgeはプライマリフォルダに書き込みます。追加フォルダは順番に検索されます。";
+"Primary" = "プライマリ";
+"Additional %lld" = "追加 %lld";
+"Choose" = "選択";
+"Available" = "利用可能";
+"Unavailable" = "利用不可";
+"Add folder" = "フォルダを追加";
+"Add" = "追加";
+"Choose one or more model folders to search." = "検索するモデルフォルダを1つ以上選択してください。";
+"Choose the folder for downloads and Forge output." = "ダウンロードとForgeの出力先フォルダを選択してください。";
+"Local MTPLX model in a configured library." = "設定済みライブラリ内のローカルMTPLXモデル。";
