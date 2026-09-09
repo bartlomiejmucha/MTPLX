@@ -24,10 +24,18 @@ All notable user-facing changes to MTPLX. The format is based on
   architecture with whether the M5 tensor-unit route is available. The
   issue's kernel-build failure on macOS 15 is unreachable on 2.11.2 code;
   the check answers which MTPLX actually ran.
-- **Responses API** (Philip John Basile). `POST /v1/responses` is served as
+- **Responses API** (PR #219, Philip John Basile). `POST /v1/responses` is served as
   a stateless, text-only adapter over the chat runtime, covering
   client-executed function, custom and namespace tools, with SDK-backed
-  tests.
+  tests. `docs/api.md` carries the Codex CLI settings that make its first
+  request work (hosted web search off, image generation off, a dedicated
+  `CODEX_HOME` so installed Codex apps do not add their connector schemas).
+- **Models in the shared Hugging Face cache are found** (issue #445). The
+  model resolver consults `HF_HOME` / `HF_HUB_CACHE` after MTPLX's own
+  cache, honours `HF_HUB_OFFLINE`, and holds the copy to the same
+  completeness gate, so a pack already downloaded with the Hugging Face
+  CLI is served without a second download; Forge builds from the local
+  copy first and stamps the revision it built from.
 - **aria2 download backend as an opt-in** (PR #452, zeeshanhaque21).
   `mtplx pull --download-backend aria2` uses aria2c for multi-connection
   pulls and fails with an install hint when aria2c is missing;
@@ -138,7 +146,9 @@ All notable user-facing changes to MTPLX. The format is based on
   `!` in the Qwen vocabulary (the thousands of exclamation marks of issue
   #311). The request ends with `finish_reason: error`, code
   `non_finite_logits`, a message with the NaN/inf counts, the session's
-  cached state is dropped, and the daemon stays up.
+  cached state is dropped, and the daemon stays up. A row that constrained
+  decoding masks to -inf with a finite winner is legitimate and passes the
+  guard.
 - **The Flash-Next AR sampler follows the reference nucleus law.** The
   pipelined AR sampler measured top-p on the top-k slice alone, keeping one
   to five fewer of the top-20 tokens than every other lane at 1.0/0.95/20;
@@ -244,8 +254,16 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Changed
 
-- **transformers floor raised to 5.10.0** (Dependabot alert 24); the lock
-  moves to 5.14.1.
+- **transformers floor raised to 5.10.0** (Dependabot alert 24, the
+  `save_pretrained` path-traversal range); the lock moves to 5.14.1.
+- **The dead M=8 K-split verify kernel is removed** (issue #322). Nothing
+  dispatched `nax_qmm_m8` since it landed (0.51-0.87x of stock on every
+  live shape); the evidence stays as a comment beside the M=16 eligibility
+  helper so the closed branch is not re-litigated.
+- **Docs.** The adaptive depth policy flag (`docs/server.md`), the request-capture
+  ring size (`MTPLX_REQUEST_CAPTURE_KEEP`), the reasoning effort surfaces
+  (`docs/api.md`, issue #484) and the OpenCode CLI's per-turn system-prompt
+  rebuild with its measured cost (`docs/perf`) are documented.
 
 ## [2.11.2] - 2026-09-06
 
