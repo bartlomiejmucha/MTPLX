@@ -2642,6 +2642,9 @@ def _render_doctor_report(args: Any, report: dict[str, Any]) -> int:
         )
         print(f"project: {env_info.get('project_root') or os.getcwd()}")
         print(f"model cache: {hf.get('cache_dir') or 'default'}")
+        model_roots = [str(root) for root in hf.get("model_roots") or ()]
+        if len(model_roots) > 1:
+            print(f"model roots (search order): {', '.join(model_roots)}")
         print(f"cached models: {hf.get('cached_models', 'unknown')}")
         token_source = hf.get("token_source")
         if token_source == "environment":

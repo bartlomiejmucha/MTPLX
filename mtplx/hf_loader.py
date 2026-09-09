@@ -332,6 +332,29 @@ def model_library_roots(
     return tuple(roots)
 
 
+def ensure_model_root(root: str | Path) -> Path:
+    """Create the writable model root, naming the real problem when it cannot be.
+
+    A library kept on an external drive that is not connected resolves to a
+    path under ``/Volumes`` that no user process may create, and a read-only
+    location fails the same way. The bare ``PermissionError`` names whichever
+    parent refused, not the setting the user has to change, so downloads and
+    Forge builds say which model directory is unavailable and why.
+    """
+
+    path = Path(root).expanduser()
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except PermissionError as exc:
+        raise RuntimeError(
+            f"model directory {path} is not available: its volume is not "
+            f"mounted or the location is not writable ({exc.strerror}: "
+            f"{exc.filename}). Reconnect the drive or choose another model "
+            "directory."
+        ) from exc
+    return path
+
+
 def safe_model_name(repo_id: str) -> str:
     return repo_id.strip("/").replace("/", "--")
 
@@ -1583,8 +1606,7 @@ def pull_model(
     if repo_id is None:
         raise ValueError(f"pull requires a Hugging Face repo id or URL, got: {model_ref}")
     revision = _effective_model_revision(repo_id, revision)
-    root = model_cache_dir(cache_dir).expanduser().absolute()
-    root.mkdir(parents=True, exist_ok=True)
+    root = ensure_model_root(model_cache_dir(cache_dir).expanduser().absolute())
     if destination is None:
         destination = cached_model_path(repo_id, cache_dir=root)
     destination = Path(destination).expanduser().absolute()
@@ -1849,22 +1871,18 @@ def resolve_cached_model_target(
 
     raw_ref = str(model_ref).strip()
     repo_id = repo_id_from_model_ref(raw_ref)
-    allow_literal_dotdot_child = raw_ref == "../.."
     if repo_id is None:
-        if (
-            not raw_ref
-            or raw_ref in {".", ".."}
-            or (not allow_literal_dotdot_child and ("/" in raw_ref or "\\" in raw_ref))
-        ):
+        # Not a Hugging Face id: only a cached directory name ("Org--Name" or
+        # a bare branded name) is accepted. Anything carrying a path
+        # separator is refused outright, so no traversal spelling needs to
+        # be reasoned about individually.
+        if not raw_ref or "/" in raw_ref or "\\" in raw_ref:
             raise ValueError(
                 f"refusing to remove model ref {model_ref!r}: "
                 "invalid cached model reference"
             )
-        repo_id = raw_ref if allow_literal_dotdot_child else raw_ref.replace("--", "/")
-    segments = repo_id.split("/")
-    if not allow_literal_dotdot_child and any(
-        not segment or segment in {".", ".."} for segment in segments
-    ):
+        repo_id = raw_ref.replace("--", "/")
+    if any(not segment or segment in {".", ".."} for segment in repo_id.split("/")):
         raise ValueError(
             f"refusing to remove model ref {model_ref!r}: "
             "invalid cached model reference"
@@ -1875,7 +1893,7 @@ def resolve_cached_model_target(
     seen: set[str] = set()
     for root_index, root in enumerate(roots):
         names = [safe_model_name(repo_id)]
-        if "/" in repo_id and not allow_literal_dotdot_child:
+        if "/" in repo_id:
             names.append(repo_id.split("/", 1)[1])
         for name in names:
             path = root / name

@@ -953,17 +953,18 @@ def test_remove_cached_model_refuses_paths_outside_cache(tmp_path: Path, ref: st
     assert (model / "weights.bin").read_bytes() == b"1234"
 
 
-def test_remove_cached_model_contains_dotdot_refs_inside_cache(tmp_path: Path):
-    # "../.." is not an escape: safe_model_name folds it to the literal child
-    # name "..--..", which stays inside the cache. It must therefore be a
-    # plain miss, not a deletion and not a traversal.
+def test_remove_cached_model_refuses_dotdot_refs(tmp_path: Path):
+    # "../.." names no cached directory. It used to fold to the literal child
+    # "..--.." and report a plain miss; refusing every separator-bearing ref
+    # keeps the fence one rule, and nothing beside the sentinel may move.
     home, cache, model = _traversal_cache(tmp_path)
 
-    result = remove_cached_model("../..", cache_dir=cache)
+    with pytest.raises(ValueError) as excinfo:
+        remove_cached_model("../..", cache_dir=cache)
 
-    assert result["removed"] is False
-    assert Path(result["path"]).parent == cache.resolve()
+    assert repr("../..") in str(excinfo.value)
     assert home.exists()
+    assert cache.exists()
     assert (home / "config.toml").exists()
     assert (model / "weights.bin").read_bytes() == b"1234"
 
@@ -1148,6 +1149,26 @@ def test_pull_rejects_top_level_symlink_destination(tmp_path: Path):
 
     with pytest.raises(RuntimeError, match="top-level symlink"):
         pull_model("mtplx/example", cache_dir=primary)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can create any directory")
+def test_pull_explains_unavailable_model_root(tmp_path: Path):
+    # A library on a drive that is not connected resolves to a path nobody can
+    # create (mkdir under /Volumes is refused for users); a read-only parent
+    # fails the same way. The error names the model directory and the cause.
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    root = locked / "ExternalSSD" / "models"
+    try:
+        with pytest.raises(RuntimeError, match="is not available") as excinfo:
+            pull_model("mtplx/example", cache_dir=root)
+    finally:
+        locked.chmod(0o700)
+
+    assert str(root) in str(excinfo.value)
+    assert "not mounted" in str(excinfo.value)
+    assert not root.exists()
 
 
 def test_pull_rejects_unsafe_filename_before_snapshot_write(tmp_path: Path, monkeypatch):

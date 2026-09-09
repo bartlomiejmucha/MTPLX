@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import mlx.core as mx
+import os
+
 import pytest
 
 from mtplx.cli import build_parser, main
@@ -2668,3 +2670,22 @@ def test_forge_still_pulls_a_source_that_is_not_on_disk(tmp_path, monkeypatch):
     assert calls == ["org/name"]
     assert path == downloaded
     assert repo_id == "org/name"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can create any directory")
+def test_unique_model_dir_explains_unavailable_model_root(tmp_path):
+    # The app passes --model-root for every build; when that root sits on a
+    # drive that is not connected, the build must stop with the directory
+    # named, not a bare permission error from whichever parent refused.
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    root = locked / "ExternalSSD" / "models"
+    try:
+        with pytest.raises(forge.ForgeError, match="is not available") as excinfo:
+            forge._unique_model_dir("Built", model_root=root)
+    finally:
+        locked.chmod(0o700)
+
+    assert str(root) in str(excinfo.value)
+    assert excinfo.value.code == 2

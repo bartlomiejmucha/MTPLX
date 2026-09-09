@@ -21,6 +21,7 @@ from mtplx.artifacts import inspect_model, text_config
 from mtplx.benchmarks.validators.basic import summarize_benchmark_quality
 from mtplx.hf_loader import (
     directory_size_bytes,
+    ensure_model_root,
     hf_token_for_download,
     pull_model,
     read_source_marker,
@@ -3920,7 +3921,10 @@ def _unique_model_dir(
     """
 
     root = _default_model_root(model_root)
-    root.mkdir(parents=True, exist_ok=True)
+    try:
+        ensure_model_root(root)
+    except RuntimeError as exc:
+        raise ForgeError(str(exc), code=2) from exc
     base = root / branded_name
     if not base.exists():
         return base
