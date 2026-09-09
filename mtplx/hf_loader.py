@@ -12,7 +12,7 @@ import re
 import shutil
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Iterable, Iterator
 
 from mtplx.artifacts import _hf_repo_id_from_ref
@@ -293,6 +293,43 @@ def model_cache_dir(value: str | Path | None = None) -> Path:
     if env:
         return Path(env).expanduser()
     return DEFAULT_MODEL_CACHE
+
+
+def model_library_roots(
+    cache_dir: str | Path | None = None,
+    *,
+    search_dirs: Iterable[str | Path] | None = None,
+) -> tuple[Path, ...]:
+    """Ordered, canonical model roots with the writable cache first.
+
+    ``cache_dir`` retains the existing explicit/config/``MTPLX_MODEL_DIR``
+    primary-root contract. Additional roots are discovery-only and come from
+    the caller followed by the platform path-list in ``MTPLX_MODEL_DIRS``.
+    """
+
+    if isinstance(search_dirs, (str, Path)):
+        caller_dirs: Iterable[str | Path] = (search_dirs,)
+    else:
+        caller_dirs = search_dirs or ()
+    env_dirs = os.environ.get("MTPLX_MODEL_DIRS", "").split(os.pathsep)
+    candidates: Iterable[str | Path] = (
+        model_cache_dir(cache_dir),
+        *caller_dirs,
+        *(entry for entry in env_dirs if entry.strip()),
+    )
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        text = str(candidate).strip()
+        if not text:
+            continue
+        root = Path(text).expanduser().resolve(strict=False)
+        key = os.path.normcase(str(root))
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(root)
+    return tuple(roots)
 
 
 def safe_model_name(repo_id: str) -> str:
@@ -592,29 +629,33 @@ def huggingface_cache_path(repo_id: str) -> Path | None:
     return resolved if resolved.is_dir() else None
 
 
-def resolve_model_path(model_ref: str, *, cache_dir: str | Path | None = None) -> Path:
+def resolve_model_path(
+    model_ref: str,
+    *,
+    cache_dir: str | Path | None = None,
+    search_dirs: Iterable[str | Path] | None = None,
+) -> Path:
     local = Path(model_ref).expanduser()
     if local.exists():
         return local
     repo_id = repo_id_from_model_ref(model_ref)
     if repo_id is None:
         raise FileNotFoundError(f"Model path is not available locally: {local}")
-    cached = cached_model_path(repo_id, cache_dir=cache_dir)
-    if _cached_model_ready_for_repo(cached, repo_id):
-        return cached
-    # Branded local builds (forge output, `mtplx models` rows) live under the
-    # bare repo basename, not the Org--Name snapshot layout. Bench's default
-    # model selection already resolves them for the same id ("installed
-    # locally"); quickstart/serve must agree, or the CLI tells a user to
-    # re-download 20 GB it already lists. Same contract gate as above.
-    if "/" in repo_id:
-        branded = cached.parent / repo_id.split("/", 1)[1]
-        if branded != cached and _cached_model_ready_for_repo(branded, repo_id):
-            return branded
+    for root in model_library_roots(cache_dir, search_dirs=search_dirs):
+        cached = root / safe_model_name(repo_id)
+        if _cached_model_ready_for_repo(cached, repo_id):
+            return cached
+        # Branded local builds (forge output, `mtplx models` rows) live under
+        # the bare repo basename. Root precedence wins over layout preference:
+        # return the first complete copy from the ordered library list.
+        if "/" in repo_id:
+            branded = root / repo_id.split("/", 1)[1]
+            if branded != cached and _cached_model_ready_for_repo(branded, repo_id):
+                return branded
     # Last local step before the download hint: the machine-wide Hugging Face
-    # cache. MTPLX's own cache stays first so existing installs resolve where
-    # they always did, and the shared snapshot is held to the same contract
-    # gate, so a half-downloaded copy is skipped rather than served.
+    # cache. MTPLX's own library roots stay first so existing installs resolve
+    # where they always did, and the shared snapshot is held to the same
+    # contract gate, so a half-downloaded copy is skipped rather than served.
     shared = huggingface_cache_path(repo_id)
     if shared is not None and _cached_model_ready_for_repo(shared, repo_id):
         return shared
@@ -960,11 +1001,34 @@ def _classify_pull_error(exc: BaseException, repo_id: str) -> str:
 
 
 def _safe_destination_for_repo_file(destination: Path, repo_file: RepoFile) -> Path:
-    target = destination / repo_file.path
+    raw = str(repo_file.path)
+    posix = PurePosixPath(raw)
+    windows = PureWindowsPath(raw)
+    if (
+        not raw.strip()
+        or posix.is_absolute()
+        or windows.is_absolute()
+        or ".." in posix.parts
+        or ".." in windows.parts
+    ):
+        raise RuntimeError(f"unsafe file path in Hugging Face repo: {repo_file.path}")
+    target = destination.joinpath(*posix.parts)
+    if destination.is_symlink():
+        raise RuntimeError(f"unsafe model destination symlink: {destination}")
+    canonical_destination = destination.resolve(strict=False)
+    cursor = destination
+    for part in posix.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise RuntimeError(
+                f"unsafe symlink component in Hugging Face repo path: {repo_file.path}"
+            )
     try:
-        target.relative_to(destination)
+        target.parent.resolve(strict=False).relative_to(canonical_destination)
     except ValueError as exc:
-        raise RuntimeError(f"unsafe file path in Hugging Face repo: {repo_file.path}") from exc
+        raise RuntimeError(
+            f"unsafe file path in Hugging Face repo: {repo_file.path}"
+        ) from exc
     return target
 
 
@@ -1404,6 +1468,9 @@ class CachedModel:
     has_runtime_contract: bool
     has_config: bool
     validation: dict[str, Any]
+    root: Path | None = None
+    root_index: int = 0
+    is_primary: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         # Per-model launch resolution promotes the quantized flagships to
@@ -1420,6 +1487,9 @@ class CachedModel:
             "has_runtime_contract": self.has_runtime_contract,
             "has_config": self.has_config,
             "validation": self.validation,
+            "root": str(self.root or self.path.parent),
+            "root_index": self.root_index,
+            "is_primary": self.is_primary,
             "recommended_profile": (
                 resolved_default_profile_name_for_ref(self.path)
                 if self.validation.get("ok")
@@ -1429,25 +1499,39 @@ class CachedModel:
         }
 
 
-def list_cached_models(*, cache_dir: str | Path | None = None) -> list[CachedModel]:
-    root = model_cache_dir(cache_dir)
-    if not root.exists():
-        return []
+def list_cached_models(
+    *,
+    cache_dir: str | Path | None = None,
+    search_dirs: Iterable[str | Path] | None = None,
+) -> list[CachedModel]:
     rows: list[CachedModel] = []
-    for child in sorted(root.iterdir()):
-        if not child.is_dir() or child.name.startswith("."):
+    seen: set[str] = set()
+    for root_index, root in enumerate(
+        model_library_roots(cache_dir, search_dirs=search_dirs)
+    ):
+        if not root.is_dir():
             continue
-        repo_id = child.name.replace("--", "/")
-        rows.append(
-            CachedModel(
-                repo_id=repo_id,
-                path=child,
-                size_bytes=directory_size_bytes(child),
-                has_runtime_contract=(child / "mtplx_runtime.json").exists(),
-                has_config=(child / "config.json").exists(),
-                validation=validate_mtplx_model_files(child),
+        for child in sorted(root.iterdir()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            identity = os.path.normcase(str(child.resolve(strict=False)))
+            if identity in seen:
+                continue
+            seen.add(identity)
+            repo_id = child.name.replace("--", "/")
+            rows.append(
+                CachedModel(
+                    repo_id=repo_id,
+                    path=child,
+                    size_bytes=directory_size_bytes(child),
+                    has_runtime_contract=(child / "mtplx_runtime.json").exists(),
+                    has_config=(child / "config.json").exists(),
+                    validation=validate_mtplx_model_files(child),
+                    root=root,
+                    root_index=root_index,
+                    is_primary=root_index == 0,
+                )
             )
-        )
     return rows
 
 
@@ -1499,10 +1583,17 @@ def pull_model(
     if repo_id is None:
         raise ValueError(f"pull requires a Hugging Face repo id or URL, got: {model_ref}")
     revision = _effective_model_revision(repo_id, revision)
-    root = model_cache_dir(cache_dir)
+    root = model_cache_dir(cache_dir).expanduser().absolute()
     root.mkdir(parents=True, exist_ok=True)
     if destination is None:
         destination = cached_model_path(repo_id, cache_dir=root)
+    destination = Path(destination).expanduser().absolute()
+    if destination.parent.resolve() != root.resolve():
+        raise ValueError(f"pull destination must be a direct child of {root}")
+    if destination.is_symlink():
+        raise RuntimeError(
+            f"refusing to write model through top-level symlink: {destination}"
+        )
 
     started_size = directory_size_bytes(destination)
     started_disk_bytes = started_size
@@ -1610,6 +1701,11 @@ def pull_model(
             total_bytes = _query_repo_total_bytes(repo_id, revision=download_revision)
         else:
             total_bytes = None
+        for name, entry in (remote_files or {}).items():
+            _safe_destination_for_repo_file(
+                destination,
+                RepoFile(path=name, size_bytes=entry.get("size")),
+            )
         _require_download_disk_headroom(
             root,
             total_bytes=total_bytes,
@@ -1744,45 +1840,113 @@ def pull_model(
 
 
 def resolve_cached_model_target(
-    model_ref: str, *, cache_dir: str | Path | None = None
+    model_ref: str,
+    *,
+    cache_dir: str | Path | None = None,
+    search_dirs: Iterable[str | Path] | None = None,
 ) -> tuple[str, Path]:
-    """Resolve a model ref to the cached directory it is allowed to delete.
+    """Resolve one unambiguous, primary-root cache entry without deleting it."""
 
-    Containment fence for destructive cache operations. ``safe_model_name``
-    only swaps "/" for "--", so refs like ".", "..", "/", and "" collapse onto
-    the models cache itself or its parent (~/.mtplx — bin, config.toml,
-    session-bank, logs); an unguarded ``rmtree`` took the lot and still exited
-    0. A legitimate ref always resolves to a direct child of the models cache.
-    Raises ValueError for anything else, so callers refuse rather than delete.
-    """
-
-    repo_id = repo_id_from_model_ref(model_ref) or model_ref.replace("--", "/")
-    root = model_cache_dir(cache_dir).resolve()
-    path = cached_model_path(repo_id, cache_dir=cache_dir).resolve()
-    if path.parent != root or path.name in {"", ".", ".."}:
+    raw_ref = str(model_ref).strip()
+    repo_id = repo_id_from_model_ref(raw_ref)
+    allow_literal_dotdot_child = raw_ref == "../.."
+    if repo_id is None:
+        if (
+            not raw_ref
+            or raw_ref in {".", ".."}
+            or (not allow_literal_dotdot_child and ("/" in raw_ref or "\\" in raw_ref))
+        ):
+            raise ValueError(
+                f"refusing to remove model ref {model_ref!r}: "
+                "invalid cached model reference"
+            )
+        repo_id = raw_ref if allow_literal_dotdot_child else raw_ref.replace("--", "/")
+    segments = repo_id.split("/")
+    if not allow_literal_dotdot_child and any(
+        not segment or segment in {".", ".."} for segment in segments
+    ):
         raise ValueError(
-            f"refusing to remove {path}: model ref {model_ref!r} does not name "
-            f"a model directory inside {root}"
+            f"refusing to remove model ref {model_ref!r}: "
+            "invalid cached model reference"
+        )
+
+    roots = model_library_roots(cache_dir, search_dirs=search_dirs)
+    matches: list[tuple[int, Path]] = []
+    seen: set[str] = set()
+    for root_index, root in enumerate(roots):
+        names = [safe_model_name(repo_id)]
+        if "/" in repo_id and not allow_literal_dotdot_child:
+            names.append(repo_id.split("/", 1)[1])
+        for name in names:
+            path = root / name
+            if path == root or path.parent.resolve() != root.resolve():
+                raise ValueError(
+                    f"refusing to remove {path}: model ref {model_ref!r} does "
+                    f"not name a model directory inside {root}"
+                )
+            key = os.path.normcase(str(path.absolute()))
+            if key in seen or not (path.exists() or path.is_symlink()):
+                continue
+            seen.add(key)
+            matches.append((root_index, path))
+
+    default_path = roots[0] / safe_model_name(repo_id)
+    if len(matches) > 1:
+        paths = ", ".join(str(path) for _, path in matches)
+        raise ValueError(
+            f"multiple installed copies match {repo_id}: {paths}; "
+            "select one root explicitly with --cache-dir"
+        )
+    if not matches:
+        return repo_id, default_path
+    root_index, path = matches[0]
+    if root_index != 0:
+        raise ValueError(
+            f"model is installed in discovery-only root {path.parent}; "
+            "select that root explicitly with --cache-dir to remove it"
         )
     return repo_id, path
 
 
-def remove_cached_model(model_ref: str, *, cache_dir: str | Path | None = None) -> dict[str, Any]:
-    repo_id, path = resolve_cached_model_target(model_ref, cache_dir=cache_dir)
-    existed = path.exists()
-    size = directory_size_bytes(path) if existed else 0
-    if existed:
+def remove_cached_model(
+    model_ref: str,
+    *,
+    cache_dir: str | Path | None = None,
+    search_dirs: Iterable[str | Path] | None = None,
+) -> dict[str, Any]:
+    repo_id, path = resolve_cached_model_target(
+        model_ref, cache_dir=cache_dir, search_dirs=search_dirs
+    )
+    if not (path.exists() or path.is_symlink()):
+        return {
+            "repo_id": repo_id,
+            "path": str(path),
+            "removed": False,
+            "size_bytes_removed": 0,
+        }
+    if path.is_symlink():
+        size = 0
+        path.unlink()
+    elif path.is_dir():
+        size = directory_size_bytes(path)
         shutil.rmtree(path)
+    else:
+        raise ValueError(f"cached model entry is not a directory: {path}")
     return {
         "repo_id": repo_id,
         "path": str(path),
-        "removed": existed,
+        "removed": True,
         "size_bytes_removed": size,
     }
 
 
-def hf_cache_report(*, cache_dir: str | Path | None = None) -> dict[str, Any]:
+def hf_cache_report(
+    *,
+    cache_dir: str | Path | None = None,
+    search_dirs: Iterable[str | Path] | None = None,
+) -> dict[str, Any]:
     root = model_cache_dir(cache_dir)
+    roots = model_library_roots(cache_dir, search_dirs=search_dirs)
     # The same resolver pull uses, so doctor can never report a token that
     # pull then ignores (or the other way round).
     token_source = hf_token_source()
@@ -1794,11 +1958,14 @@ def hf_cache_report(*, cache_dir: str | Path | None = None) -> dict[str, Any]:
         free_bytes = None
     return {
         "cache_dir": str(root),
+        "model_roots": [str(candidate) for candidate in roots],
         "cache_exists": root.exists(),
         "cache_writable": os.access(root if root.exists() else root.parent, os.W_OK),
         "disk_free_bytes": free_bytes,
         "disk_free_gb": round(free_bytes / 1_000_000_000, 3) if free_bytes is not None else None,
-        "cached_models": len(list_cached_models(cache_dir=root)),
+        "cached_models": len(
+            list_cached_models(cache_dir=root, search_dirs=roots[1:])
+        ),
         "token_present": token_present,
         "token_source": token_source,
         "token_used_by_pull": token_present,

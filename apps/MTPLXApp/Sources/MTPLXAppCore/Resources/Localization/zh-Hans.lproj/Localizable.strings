@@ -584,7 +584,7 @@
 "Forge isn't available" = "Forge 不可用";
 "Forge only publishes models that proved an MTP speed win on this Mac." = "Forge 仅发布已在这台 Mac 上证实具备 MTP 速度优势的模型。";
 "Forge will register the model only after the verified MTPLX runtime metadata is available." = "Forge 仅在已验证的 MTPLX 运行时元数据可用后才会注册该模型。";
-"Forge will save ~/Documents/MTPLX/models/%@/" = "Forge 将保存至 ~/Documents/MTPLX/models/%@/";
+"Forge will save %@/" = "Forge 将保存至 %@/";
 "Forged" = "已通过 Forge 构建";
 "Forged %@" = "已通过 Forge 构建 %@";
 "Forged locally with MTPLX Forge." = "已使用 MTPLX Forge 在本地构建。";

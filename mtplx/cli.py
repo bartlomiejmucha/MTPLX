@@ -627,6 +627,16 @@ def _add_reasoning_effort_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_model_search_dir_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--model-search-dir",
+        dest="model_search_dirs",
+        action="append",
+        default=None,
+        help="Additional read-only model library root; repeat for ordered lookup.",
+    )
+
+
 def _add_preserve_thinking_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--preserve-thinking",
@@ -1064,7 +1074,7 @@ def cmd_config_public(args: argparse.Namespace) -> int:
 def cmd_forge_public(args: argparse.Namespace) -> int:
     from .commands.forge import cmd_forge_public as handler
 
-    return handler(args)
+    return handler(args, model_root=getattr(args, "model_root", None))
 
 
 def cmd_trace_public(args: argparse.Namespace) -> int:
@@ -1148,6 +1158,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
         "dry_run": bool(args.dry_run),
         "model": args.model,
         "model_dir": str(model_dir),
+        "model_dirs": list(getattr(args, "model_search_dirs", None) or ()),
         "profile": profile.to_dict(),
         "hardware": hardware,
         "thermal_control": {
@@ -1163,14 +1174,21 @@ def _cmd_init(args: argparse.Namespace) -> int:
     }
     if args.write and not args.dry_run:
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(
-            "# MTPLX user configuration\n"
-            f"model = {json.dumps(args.model)}\n"
-            f"model_dir = {json.dumps(str(model_dir))}\n"
-            f"profile = {json.dumps(profile.name)}\n"
-            f"thermal_control = {json.dumps(args.thermal_control)}\n",
-            encoding="utf-8",
+        config_lines = [
+            "# MTPLX user configuration",
+            f"model = {json.dumps(args.model)}",
+            f"model_dir = {json.dumps(str(model_dir))}",
+        ]
+        model_search_dirs = list(getattr(args, "model_search_dirs", None) or ())
+        if model_search_dirs:
+            config_lines.append(f"model_dirs = {json.dumps(model_search_dirs)}")
+        config_lines.extend(
+            [
+                f"profile = {json.dumps(profile.name)}",
+                f"thermal_control = {json.dumps(args.thermal_control)}",
+            ]
         )
+        config_path.write_text("\n".join(config_lines) + "\n", encoding="utf-8")
         report["wrote_config"] = True
     if args.download and not args.dry_run:
         try:
@@ -2261,6 +2279,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--model", help="Verified model path or Hugging Face repo id"
     )
     start_flow_p.add_argument("--cache-dir")
+    _add_model_search_dir_args(start_flow_p)
     start_flow_p.add_argument(
         "--profile",
         type=_profile_arg,
@@ -2434,6 +2453,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--model-dir",
         help="Model cache directory; defaults to MTPLX_MODEL_DIR or ~/.mtplx/models",
     )
+    _add_model_search_dir_args(setup_p)
     setup_p.add_argument(
         "--profile",
         type=_profile_arg,
@@ -2464,6 +2484,7 @@ def build_parser() -> argparse.ArgumentParser:
     status_p = sub.add_parser("status", help="Check whether MTPLX is ready to run")
     status_p.add_argument("--project-root", default=".")
     status_p.add_argument("--model-cache")
+    _add_model_search_dir_args(status_p)
     status_p.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON"
     )
@@ -2522,6 +2543,7 @@ def build_parser() -> argparse.ArgumentParser:
     ask_p.add_argument("prompt_arg", nargs="?", help="Prompt text")
     ask_p.add_argument("--model", default=default_model)
     ask_p.add_argument("--cache-dir")
+    _add_model_search_dir_args(ask_p)
     ask_p.add_argument(
         "--profile",
         type=_profile_arg,
@@ -2575,6 +2597,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     quickstart_server_p.add_argument("--model", default=default_model)
     quickstart_server_p.add_argument("--cache-dir")
+    _add_model_search_dir_args(quickstart_server_p)
     quickstart_server_p.add_argument(
         "--download",
         action="store_true",
@@ -2827,6 +2850,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="List locally cached MTPLX models; check for and apply pack updates",
     )
     models_p.add_argument("--cache-dir")
+    _add_model_search_dir_args(models_p)
     models_p.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON"
     )
@@ -2893,6 +2917,7 @@ def build_parser() -> argparse.ArgumentParser:
         or "",
     )
     doctor_p.add_argument("--model-cache")
+    _add_model_search_dir_args(doctor_p)
     doctor_p.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON"
     )
@@ -2922,6 +2947,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tune_p.add_argument("--model", default=default_model)
     tune_p.add_argument("--cache-dir")
+    _add_model_search_dir_args(tune_p)
     tune_p.add_argument(
         "--depths",
         default=None,
@@ -3044,6 +3070,7 @@ def build_parser() -> argparse.ArgumentParser:
         or "",
     )
     report_p.add_argument("--model-cache")
+    _add_model_search_dir_args(report_p)
     report_p.add_argument("--output-dir", help="Directory for the report bundle")
     report_p.add_argument(
         "--include-paths", action="store_true", help="Keep local paths in the report"
@@ -3218,6 +3245,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--branded-name", required=True, help="Local MTPLX artifact name"
     )
     forge_build_p.add_argument(
+        "--model-root",
+        help="Primary model directory for source downloads and final Forge output",
+    )
+    forge_build_p.add_argument(
         "--max", action="store_true", help="Opt into max-fan verification"
     )
     forge_build_p.add_argument(
@@ -3327,6 +3358,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--model-dir",
         help="Model cache directory; defaults to MTPLX_MODEL_DIR or ~/.mtplx/models",
     )
+    _add_model_search_dir_args(init_p)
     init_p.add_argument(
         "--profile",
         type=_profile_arg,
@@ -3390,6 +3422,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_p = sub.add_parser("list", help="List locally cached MTPLX models")
     list_p.add_argument("--cache-dir")
+    _add_model_search_dir_args(list_p)
     list_p.add_argument(
         "--json", action="store_true", help="Emit machine-readable JSON"
     )
@@ -3400,6 +3433,7 @@ def build_parser() -> argparse.ArgumentParser:
         "model", help="Hugging Face repo id, URL, or cached safe name"
     )
     remove_p.add_argument("--cache-dir")
+    _add_model_search_dir_args(remove_p)
     remove_p.add_argument("--missing-ok", action="store_true")
     remove_p.add_argument(
         "--yes", action="store_true", help="Skip the delete confirmation prompt"
@@ -3413,6 +3447,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("prompt_arg", nargs="?", help="Prompt text")
     run_p.add_argument("--model", default=default_model)
     run_p.add_argument("--cache-dir")
+    _add_model_search_dir_args(run_p)
     run_p.add_argument(
         "--profile",
         type=_profile_arg,
@@ -3456,6 +3491,7 @@ def build_parser() -> argparse.ArgumentParser:
     chat_p = sub.add_parser("chat", help="Run one native-MTP chat smoke generation")
     chat_p.add_argument("--model", default=default_model)
     chat_p.add_argument("--cache-dir")
+    _add_model_search_dir_args(chat_p)
     chat_p.add_argument(
         "--profile",
         type=_profile_arg,
@@ -3499,6 +3535,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve_p.add_argument("--model", default=default_model)
     serve_p.add_argument("--cache-dir")
+    _add_model_search_dir_args(serve_p)
     serve_p.add_argument(
         "--download",
         action="store_true",
@@ -3967,6 +4004,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench_p.add_argument("--min-free-gib", type=float, default=25.0)
     bench_p.add_argument("--model", default=default_model)
     bench_p.add_argument("--cache-dir")
+    _add_model_search_dir_args(bench_p)
     bench_p.add_argument(
         "--prompts",
         help="Prompt suite name or .jsonl path; defaults to the packaged default suite",

@@ -582,7 +582,7 @@
 "Forge isn't available" = "Forge no está disponible";
 "Forge only publishes models that proved an MTP speed win on this Mac." = "Forge solo publica modelos que demostraron una ganancia de velocidad con MTP en este Mac.";
 "Forge will register the model only after the verified MTPLX runtime metadata is available." = "Forge registrará el modelo solo cuando estén disponibles los metadatos verificados del runtime de MTPLX.";
-"Forge will save ~/Documents/MTPLX/models/%@/" = "Forge guardará en ~/Documents/MTPLX/models/%@/";
+"Forge will save %@/" = "Forge guardará en %@/";
 "Forged" = "Forjado";
 "Forged %@" = "Forjado %@";
 "Forged locally with MTPLX Forge." = "Forjado localmente con MTPLX Forge.";

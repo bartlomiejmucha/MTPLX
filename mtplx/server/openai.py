@@ -14672,7 +14672,6 @@ def _postcommit_next_turn_prefix_ids(
         )
 
     normalized: list[dict[str, Any]] = []
-    last_history_role: str | None = None
     for message in history_messages:
         item = _message_to_template_dict(
             message,
@@ -14687,7 +14686,6 @@ def _postcommit_next_turn_prefix_ids(
         )
         if item is not None:
             normalized.append(item)
-            last_history_role = str(item.get("role") or "")
     item = _message_to_template_dict(
         sentinel_message,
         strip_assistant_reasoning_history=strip_assistant_reasoning_history,
@@ -36573,6 +36571,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--retrieval-cache-dir",
         default=None,
         help="Model cache directory used to resolve retrieval references",
+    )
+    parser.add_argument(
+        "--retrieval-model-root",
+        dest="retrieval_model_roots",
+        action="append",
+        default=None,
+        help="Additional read-only model library root; repeat for ordered lookup",
     )
     parser.add_argument(
         "--retrieval-trust-remote-code",

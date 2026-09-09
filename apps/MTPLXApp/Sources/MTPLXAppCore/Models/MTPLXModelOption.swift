@@ -136,6 +136,10 @@ public struct MTPLXModelOption: Codable, Equatable, Identifiable, Sendable {
         installedLocalPath ?? hfModelID
     }
 
+    public func resolvedReference(in library: ModelLibrary) -> String {
+        installedLocalPath(in: library) ?? hfModelID
+    }
+
     /// A folder the user chose on this Mac (`localFolderModel(path:)`):
     /// its only identity is its path, so the picker and the chrome label
     /// treat it differently from a forged or Hugging Face entry.
@@ -150,12 +154,20 @@ public struct MTPLXModelOption: Codable, Equatable, Identifiable, Sendable {
     /// the app should attempt the selected complete model and surface
     /// the real startup result.
     public var installedLocalPath: String? {
+        installedLocalPath(in: .default)
+    }
+
+    public func installedLocalPath(in library: ModelLibrary) -> String? {
         guard Self.localModelScanEnabled else { return nil }
-        for candidate in localCandidates {
+        var seen: Set<String> = []
+        let candidates = library.candidatePaths(for: hfModelID) + localCandidates
+        for candidate in candidates {
             let expanded = Self.expand(candidate)
+            let canonical = ModelLibrary.canonicalURL(for: expanded).path
+            guard seen.insert(canonical).inserted else { continue }
             guard FileManager.default.fileExists(atPath: expanded) else { continue }
             if Self.hasCompleteInstall(at: expanded) {
-                return expanded
+                return canonical
             }
         }
         return nil
@@ -163,6 +175,10 @@ public struct MTPLXModelOption: Codable, Equatable, Identifiable, Sendable {
 
     public var isInstalled: Bool {
         installedLocalPath != nil
+    }
+
+    public func isInstalled(in library: ModelLibrary) -> Bool {
+        installedLocalPath(in: library) != nil
     }
 
     public var modelFamily: String {
@@ -881,7 +897,8 @@ public struct MTPLXModelOption: Codable, Equatable, Identifiable, Sendable {
     public static func pickerCatalog(
         customModels: [MTPLXModelOption],
         currentModel: String? = nil,
-        hardware: DetectedHardware? = nil
+        hardware: DetectedHardware? = nil,
+        modelLibrary: ModelLibrary = .default
     ) -> [MTPLXModelOption] {
         var rows = hardwareAwareOfficialCatalog(
             hardware: hardware,
@@ -899,6 +916,34 @@ public struct MTPLXModelOption: Codable, Equatable, Identifiable, Sendable {
                ?? localFolderModel(path: currentModel)
         {
             appendCustom(current, to: &rows)
+        }
+        for local in modelLibrary.discoverCompleteModels() {
+            if let index = rows.firstIndex(where: { $0.matches(local.reference) }) {
+                rows[index].localCandidates = insertLibraryPath(
+                    local.path,
+                    to: rows[index].localCandidates,
+                    library: modelLibrary
+                )
+                continue
+            }
+            if var official = officialCatalog.first(where: { $0.matches(local.reference) }) {
+                official.localCandidates = insertLibraryPath(
+                    local.path,
+                    to: official.localCandidates,
+                    library: modelLibrary
+                )
+                appendUnique(official, to: &rows)
+                continue
+            }
+            rows.append(MTPLXModelOption(
+                id: "local:\(local.path)",
+                displayName: local.displayName,
+                shortName: local.displayName,
+                detail: "Local MTPLX model in a configured library.",
+                hfModelID: local.reference,
+                localCandidates: [local.path],
+                aliases: [local.reference, local.path]
+            ))
         }
         return rows
     }
@@ -1053,6 +1098,28 @@ public struct MTPLXModelOption: Codable, Equatable, Identifiable, Sendable {
     private static func appendUnique(_ option: MTPLXModelOption, to rows: inout [MTPLXModelOption]) {
         guard !rows.contains(where: { $0.id == option.id }) else { return }
         rows.append(option)
+    }
+
+    private static func insertLibraryPath(
+        _ path: String,
+        to paths: [String],
+        library: ModelLibrary
+    ) -> [String] {
+        let canonical = ModelLibrary.canonicalURL(for: path).path
+        let roots = Set(library.directories.map(\.path))
+        var libraryPaths: [String] = []
+        var fallbackPaths: [String] = []
+        for existing in paths {
+            let existingCanonical = ModelLibrary.canonicalURL(for: Self.expand(existing)).path
+            guard existingCanonical != canonical else { continue }
+            let parent = URL(fileURLWithPath: existingCanonical).deletingLastPathComponent().path
+            if roots.contains(parent) {
+                libraryPaths.append(existingCanonical)
+            } else {
+                fallbackPaths.append(existing)
+            }
+        }
+        return libraryPaths + [canonical] + fallbackPaths
     }
 
     public static func customHuggingFaceModel(repoID rawRepoID: String) -> MTPLXModelOption? {
