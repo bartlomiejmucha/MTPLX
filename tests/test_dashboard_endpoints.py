@@ -1131,3 +1131,34 @@ def test_a_producer_supplied_wall_clock_is_kept():
         state, {"request_id": "r1", "completed_at_s": 1234.5}
     )
     assert state.last_metrics[-1]["completed_at_s"] == 1234.5
+
+
+def test_metrics_endpoint_rows_carry_the_wall_clock_and_the_draft_totals():
+    """Wire contract for the request log (issue #401): the dashboard reads
+    `recent` rows from GET /metrics, so the row served there, not only the
+    envelope helper, has to carry `completed_at_s` and the draft totals."""
+    state = _fake_state()
+    state.last_metrics = []
+    before = time.time()
+    openai._record_request_metrics(
+        state,
+        _request_envelope(
+            {
+                "verify_calls": 12,
+                "accepted_drafts": 27,
+                "rejected_drafts": 9,
+                "drafted_tokens": 36,
+                "accepted_by_depth": [12, 9, 6],
+                "drafted_by_depth": [12, 12, 12],
+            }
+        ),
+    )
+    after = time.time()
+
+    payload = TestClient(create_app(state)).get("/metrics").json()
+    row = payload["recent"][-1]
+    assert before <= row["completed_at_s"] <= after
+    assert row["accepted_drafts"] == 27
+    assert row["drafted_tokens"] == 36
+    assert payload["latest"]["completed_at_s"] == row["completed_at_s"]
+
