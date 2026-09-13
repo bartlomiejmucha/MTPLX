@@ -38,7 +38,7 @@ from .runtime_options import block_prefix_restore_enabled
 logger = logging.getLogger(__name__)
 
 _HIGH_MEMORY_SESSION_BANK_THRESHOLD_BYTES = 96 * 1024**3
-_HIGH_MEMORY_PER_SESSION_MAX_BYTES = 24 * 1024**3
+_HIGH_MEMORY_PER_SESSION_MAX_BYTES = 32 * 1024**3
 _HIGH_MEMORY_MAX_ENTRIES = 48
 # Model-aware auto budget (v2, founder ruling 2026-07-05): the RAM cache
 # defaults to half of the RAM that remains after the model weights, so a
