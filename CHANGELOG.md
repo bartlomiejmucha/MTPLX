@@ -90,6 +90,7 @@ All notable user-facing changes to MTPLX. The format is based on
   resolves on its own; two tests keep the table equal to the catalog.
 
 ### Fixed
+- A conversation whose generation-final snapshot was refused for size (over the per-session cap, issue #499's 48 GB shape) reports that refusal as the next turn's `cache_miss_reason` (`oversized_snapshot_skipped`) and in the bank's `last_oversized_skip`; it used to surface as the cold tier's `ssd_prefix_miss`.
 
 - **A busy daemon is no longer reaped as dead** (issue #487, HenriGrimm).
   The app's watchdog killed a live daemon whose generation-final prefix
