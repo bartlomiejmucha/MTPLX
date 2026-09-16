@@ -584,7 +584,7 @@
 "Forge isn't available" = "Forge tidak tersedia";
 "Forge only publishes models that proved an MTP speed win on this Mac." = "Forge hanya memublikasikan model yang terbukti menghasilkan peningkatan kecepatan MTP di Mac ini.";
 "Forge will register the model only after the verified MTPLX runtime metadata is available." = "Forge akan mendaftarkan model hanya setelah metadata runtime MTPLX yang terverifikasi tersedia.";
-"Forge will save ~/Documents/MTPLX/models/%@/" = "Forge akan menyimpan ~/Documents/MTPLX/models/%@/";
+"Forge will save %@/" = "Forge akan menyimpan %@/";
 "Forged" = "Dibuat dengan Forge";
 "Forged %@" = "Dibuat dengan Forge %@";
 "Forged locally with MTPLX Forge." = "Dibuat secara lokal dengan MTPLX Forge.";
@@ -1579,3 +1579,15 @@
 "Ready. Open the dashboard to save this setup." = "Siap. Buka dashboard untuk menyimpan penyiapan ini.";
 "Retry verify" = "Coba verifikasi lagi";
 "Use it now" = "Gunakan sekarang";
+"Model libraries" = "Pustaka model";
+"Downloads and Forge write to the primary folder. Additional folders are searched in order." = "Unduhan dan Forge menulis ke folder utama. Folder tambahan dicari secara berurutan.";
+"Primary" = "Utama";
+"Additional %lld" = "Tambahan %lld";
+"Choose" = "Pilih";
+"Available" = "Tersedia";
+"Unavailable" = "Tidak tersedia";
+"Add folder" = "Tambah folder";
+"Add" = "Tambah";
+"Choose one or more model folders to search." = "Pilih satu atau beberapa folder model untuk dicari.";
+"Choose the folder for downloads and Forge output." = "Pilih folder untuk unduhan dan keluaran Forge.";
+"Local MTPLX model in a configured library." = "Model MTPLX lokal di pustaka yang dikonfigurasi.";

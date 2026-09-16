@@ -584,7 +584,7 @@
 "Forge isn't available" = "Forge उपलब्ध नहीं है";
 "Forge only publishes models that proved an MTP speed win on this Mac." = "Forge केवल उन्हीं मॉडलों को प्रकाशित करता है जिन्होंने इस Mac पर MTP गति का लाभ सिद्ध किया है।";
 "Forge will register the model only after the verified MTPLX runtime metadata is available." = "सत्यापित MTPLX रनटाइम मेटाडेटा उपलब्ध होने के बाद ही Forge मॉडल को पंजीकृत करेगा।";
-"Forge will save ~/Documents/MTPLX/models/%@/" = "Forge ~/Documents/MTPLX/models/%@/ सहेजेगा";
+"Forge will save %@/" = "Forge %@/ सहेजेगा";
 "Forged" = "Forge किया गया";
 "Forged %@" = "Forge किया गया %@";
 "Forged locally with MTPLX Forge." = "MTPLX Forge के साथ स्थानीय रूप से निर्मित।";
@@ -1579,3 +1579,15 @@
 "Ready. Open the dashboard to save this setup." = "तैयार। यह सेटअप सहेजने के लिए डैशबोर्ड खोलें।";
 "Retry verify" = "वेरिफ़ाई पुनः प्रयास करें";
 "Use it now" = "अभी उपयोग करें";
+"Model libraries" = "मॉडल लाइब्रेरी";
+"Downloads and Forge write to the primary folder. Additional folders are searched in order." = "डाउनलोड और Forge प्राथमिक फ़ोल्डर में लिखते हैं। अतिरिक्त फ़ोल्डर क्रम में खोजे जाते हैं।";
+"Primary" = "प्राथमिक";
+"Additional %lld" = "अतिरिक्त %lld";
+"Choose" = "चुनें";
+"Available" = "उपलब्ध";
+"Unavailable" = "अनुपलब्ध";
+"Add folder" = "फ़ोल्डर जोड़ें";
+"Add" = "जोड़ें";
+"Choose one or more model folders to search." = "खोजने के लिए एक या अधिक मॉडल फ़ोल्डर चुनें।";
+"Choose the folder for downloads and Forge output." = "डाउनलोड और Forge आउटपुट के लिए फ़ोल्डर चुनें।";
+"Local MTPLX model in a configured library." = "कॉन्फ़िगर की गई लाइब्रेरी में स्थानीय MTPLX मॉडल।";

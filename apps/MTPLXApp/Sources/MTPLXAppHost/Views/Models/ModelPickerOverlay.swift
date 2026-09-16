@@ -235,7 +235,7 @@ struct ModelPickerOverlay: View, Equatable {
     }
 
     private var availablePackUpdates: [ModelUpdateInfo] {
-        modelUpdates.filter(\.isUpdateAvailable)
+        modelUpdates.filter { $0.isUpdateAvailable && $0.canUpdateInPlace }
     }
 
     private func updateSizeText(_ update: ModelUpdateInfo) -> String? {
@@ -793,7 +793,9 @@ struct ModelPickerOverlay: View, Equatable {
         ModelPickerCatalogSignature(
             currentModel: configuration.model,
             customModels: configuration.customModels,
-            hardware: detectedHardware
+            hardware: detectedHardware,
+            primaryModelDirectory: configuration.primaryModelDirectory,
+            additionalModelDirectories: configuration.additionalModelDirectories
         )
     }
 
@@ -826,6 +828,7 @@ struct ModelPickerOverlay: View, Equatable {
         let customModels = signature.customModels
         let currentModel = signature.currentModel
         let hardware = signature.hardware
+        let modelLibrary = signature.modelLibrary
 
         prepareRowsTask?.cancel()
         prepareRowsTask = Task { @MainActor in
@@ -833,7 +836,8 @@ struct ModelPickerOverlay: View, Equatable {
                 MTPLXModelOption.pickerCatalog(
                     customModels: customModels,
                     currentModel: currentModel,
-                    hardware: hardware
+                    hardware: hardware,
+                    modelLibrary: modelLibrary
                 )
                 .map { option in
                     ModelPickerPreparedOption(
@@ -881,6 +885,15 @@ private struct ModelPickerCatalogSignature: Equatable, Sendable {
     let currentModel: String
     let customModels: [MTPLXModelOption]
     let hardware: DetectedHardware?
+    let primaryModelDirectory: String
+    let additionalModelDirectories: [String]
+
+    var modelLibrary: ModelLibrary {
+        ModelLibrary(
+            primaryDirectory: primaryModelDirectory,
+            additionalDirectories: additionalModelDirectories
+        )
+    }
 }
 
 struct ModelPickerPreparedOption: Equatable, Identifiable, Sendable {

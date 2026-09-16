@@ -584,7 +584,7 @@
 "Forge isn't available" = "Forge kullanılamıyor";
 "Forge only publishes models that proved an MTP speed win on this Mac." = "Forge yalnızca bu Mac'te MTP hız kazancını kanıtlamış modelleri yayımlar.";
 "Forge will register the model only after the verified MTPLX runtime metadata is available." = "Forge modeli ancak doğrulanmış MTPLX çalışma ortamı meta verileri hazır olduğunda kaydeder.";
-"Forge will save ~/Documents/MTPLX/models/%@/" = "Forge şuraya kaydedecek: ~/Documents/MTPLX/models/%@/";
+"Forge will save %@/" = "Forge şuraya kaydedecek: %@/";
 "Forged" = "Üretildi";
 "Forged %@" = "Üretildi %@";
 "Forged locally with MTPLX Forge." = "MTPLX Forge ile yerel olarak üretildi.";
@@ -1579,3 +1579,15 @@
 "Ready. Open the dashboard to save this setup." = "Hazır. Bu kurulumu kaydetmek için panoyu açın.";
 "Retry verify" = "Doğrulamayı yeniden dene";
 "Use it now" = "Şimdi kullan";
+"Model libraries" = "Model kitaplıkları";
+"Downloads and Forge write to the primary folder. Additional folders are searched in order." = "İndirmeler ve Forge birincil klasöre yazar. Ek klasörler sırayla aranır.";
+"Primary" = "Birincil";
+"Additional %lld" = "Ek %lld";
+"Choose" = "Seç";
+"Available" = "Kullanılabilir";
+"Unavailable" = "Kullanılamıyor";
+"Add folder" = "Klasör ekle";
+"Add" = "Ekle";
+"Choose one or more model folders to search." = "Aranacak bir veya daha fazla model klasörü seçin.";
+"Choose the folder for downloads and Forge output." = "İndirmeler ve Forge çıktısı için klasörü seçin.";
+"Local MTPLX model in a configured library." = "Yapılandırılmış bir kitaplıktaki yerel MTPLX modeli.";
