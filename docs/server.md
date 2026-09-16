@@ -137,8 +137,8 @@ in the daemon drops warm state on a short clock: the only idle timer is one
 hour, and the ten-minute number that appears in the code decides which
 session is evicted *first* when the cache is over budget, not whether anything
 is evicted at all. `/health` reports the live values under `session_bank`
-(`idle_ttl_s`, `active_pin_ttl_s`, the byte budgets and, after a miss,
-`last_miss_reason`).
+(`idle_ttl_s`, shown as `null` when the sweep is off, `active_pin_ttl_s`,
+the byte budgets and, after a miss, `last_miss_reason`).
 
 These environment variables are read by the daemon at start (`mtplx start`,
 `mtplx serve`, and the app's daemon, which inherits the login environment):

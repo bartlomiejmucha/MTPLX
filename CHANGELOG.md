@@ -23,7 +23,10 @@ All notable user-facing changes to MTPLX. The format is based on
   variables were documented. `MTPLX_SESSION_BANK_IDLE_TTL_S` now sets the
   idle limit (`0` keeps entries until memory needs them), and the five
   `MTPLX_SESSION_BANK_*` variables are documented together in
-  `docs/server.md`.
+  `docs/server.md`. `/health` and the dashboard stream report
+  `idle_ttl_s` as `null` when the sweep is off; the stream used to write
+  a bare `Infinity`, which a browser's JSON parser rejects, so every live
+  dashboard snapshot was unparseable with the knob at `0`.
 - **`mtplx doctor` names the runtime that answers** (issue #479). A new
   `runtime.identity` check reports the MTPLX version and path the doctor
   imported, the `mtplx` first on PATH and whether it runs the same
