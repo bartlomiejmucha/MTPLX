@@ -77,6 +77,16 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
+- **Remote Qwen checkpoints without MTP weights inspect as autoregressive,
+  and Forge refuses to build speculative artifacts from them** (PR #489,
+  Philip John Basile). A Hugging Face checkpoint whose listing carried every
+  trunk shard but no draft head (`nex-agi/Nex-N2.5-mini`) was reported as
+  `missing-model-weights` because the trunk check only looked at a local
+  directory; inspection now uses the same local-or-remote trunk check and
+  reports the model as runnable with MTP off. Forge's runtime probe treated
+  `can_run` as MTP evidence and admitted AR-only trunks into a speculative
+  conversion that cannot create the missing trained head; it now requires
+  MTP weight evidence and says so.
 - **The SSD session cache reconciles itself and its cap means the whole
   directory** (issue #493; three reports: 394,155 orphaned blobs, 44.1 GB,
   against 17 entries after three weeks; 471,541 blobs, 67 GB, on a 60 GB cap
