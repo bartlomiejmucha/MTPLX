@@ -2904,6 +2904,72 @@ def cmd_stop_public(args: Any) -> int:
     return 1
 
 
+def cmd_gc_public(args: Any) -> int:
+    """Reconcile the SessionBank SSD cold tier against its manifest (#493).
+
+    Read-only by default: prints/returns what is orphaned without deleting
+    anything. Pass --apply to actually delete. A concurrently running
+    server can commit a new entry between this scan and its delete, so a
+    server found running on the probed ports blocks --apply unless --force
+    is also given.
+    """
+
+    from mtplx.session_bank_gc import DEFAULT_COLD_TIER_DIR, collect_garbage
+
+    json_output = bool(getattr(args, "json", False))
+    apply = bool(getattr(args, "apply", False))
+    force = bool(getattr(args, "force", False))
+    base_dir = getattr(args, "dir", None) or DEFAULT_COLD_TIER_DIR
+
+    def emit(payload: dict[str, Any], *, lines: list[str]) -> None:
+        if json_output:
+            _print(payload)
+        else:
+            for line in lines:
+                print(line)
+
+    if apply and not force:
+        from mtplx.daemon_client import default_probe_ports, probe_running_daemons
+
+        host = str(getattr(args, "host", "127.0.0.1"))
+        daemons = probe_running_daemons(host=host, ports=default_probe_ports())
+        if daemons:
+            emit(
+                {"ok": False, "reason": "server_running", "ports": [d.port for d in daemons]},
+                lines=[
+                    (
+                        "A MTPLX server is currently running "
+                        f"(port {daemons[0].port}). A session committed while "
+                        "this runs could have its blobs deleted."
+                    ),
+                    (
+                        "Stop the server first (mtplx stop), or pass --force "
+                        "to proceed anyway."
+                    ),
+                ],
+            )
+            return 1
+
+    report = collect_garbage(base_dir, dry_run=not apply)
+    orphan_entries = len(report["orphan_entry_dirs"])
+    orphan_blobs = report["orphan_blob_files"]
+    orphan_bytes = report["orphan_blob_bytes"] + report["evicted_entries_bytes"]
+    verb = "Deleted" if apply else "Would delete"
+    lines = [
+        (
+            f"{verb} {orphan_entries} orphaned entry dir(s), "
+            f"{orphan_blobs} orphaned blob file(s), "
+            f"{orphan_bytes / 1e9:.2f} GB "
+            f"(evicted_entries/: {report['evicted_entries_bytes'] / 1e9:.2f} GB) "
+            f"in {report['base_dir']}."
+        )
+    ]
+    if not apply and (orphan_entries or orphan_blobs or report["evicted_entries_bytes"]):
+        lines.append("Re-run with --apply to delete.")
+    emit(report, lines=lines)
+    return 0
+
+
 def _parse_settings_pairs(pairs: list[str]) -> tuple[dict[str, Any], list[str]]:
     """Parse ``key=value`` pairs; values decode as JSON with string fallback."""
 
