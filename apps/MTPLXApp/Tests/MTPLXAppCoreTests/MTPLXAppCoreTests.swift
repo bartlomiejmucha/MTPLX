@@ -4283,13 +4283,19 @@ final class MTPLXAppCoreTests: XCTestCase {
             localCandidates: [model.path]
         )
 
-        XCTAssertEqual(option.installedLocalPath, model.path)
+        // The library is pinned to the temporary root: on a Mac that has this
+        // pack installed in the default library, the ordered library search
+        // (PR #387) would otherwise answer with that copy before the
+        // explicit candidate and the assertion would read the machine, not
+        // the code.
+        let library = ModelLibrary(primaryDirectory: root.path)
+        XCTAssertEqual(option.installedLocalPath(in: library), model.path)
 
         setenv("MTPLX_APP_DISABLE_LOCAL_MODEL_SCAN", "1", 1)
         defer { unsetenv("MTPLX_APP_DISABLE_LOCAL_MODEL_SCAN") }
 
-        XCTAssertNil(option.installedLocalPath)
-        XCTAssertEqual(option.resolvedReference, "Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed")
+        XCTAssertNil(option.installedLocalPath(in: library))
+        XCTAssertEqual(option.resolvedReference(in: library), "Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed")
     }
 
     func testModelInstallDetectionRespectsLaunchHomeForTildeCandidates() throws {
