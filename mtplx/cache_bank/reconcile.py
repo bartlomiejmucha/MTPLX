@@ -142,10 +142,14 @@ def manifest_entry_dirs(base_dir: Path) -> set[str]:
     return {str(row["entry_dir"]) for row in rows}
 
 
-def manifest_blob_hashes(base_dir: Path) -> set[str]:
+def manifest_blob_hashes(
+    base_dir: Path, *, on_yield: Callable[[], None] | None = None
+) -> set[str]:
     """Blob digests reachable from every manifest entry's ``payload.json``."""
     hashes: set[str] = set()
     for rel in manifest_entry_dirs(base_dir):
+        if on_yield is not None:
+            on_yield()
         hashes.update(entry_blob_hashes(base_dir / rel))
     return hashes
 
