@@ -381,7 +381,7 @@ def per_session_play_ceiling_bytes(memory_plan: Any | None) -> int | None:
 
         usable = int(getattr(memory_plan, "usable_bytes", 0) or 0)
         weights = int(getattr(memory_plan, "model_weights_bytes", 0) or 0)
-    except Exception:
+    except (ImportError, TypeError, ValueError):
         return None
     if usable <= 0 or weights <= 0:
         return None
