@@ -8,6 +8,17 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Added
 
+- **Ordered model library directories** (PR #387, Philip John Basile;
+  issue #388). One primary model folder (downloads and Forge output go
+  there) plus an ordered list of additional read-only folders that the app
+  and the CLI both search: the first complete copy wins, duplicates are
+  collapsed by real path, and an unplugged drive is skipped instead of
+  crashing. The app has a Settings card for the folders (localized in all
+  thirteen languages); the CLI takes `--model-search-dir` (repeatable) or
+  `model_dirs` in `~/.mtplx/config.toml`, and `MTPLX_MODEL_DIRS`;
+  `mtplx doctor` lists the roots. A download or Forge build into a folder
+  whose volume is not mounted now says so instead of `Permission denied`.
+
 - **`mtplx gc` reclaims orphaned SSD session-cache files** (PR #502,
   ArctifoxNL; issue #493). `mtplx gc` reports the live entries, the bytes on
   disk and everything in `~/.mtplx/session-bank/` that the manifest no
@@ -79,6 +90,28 @@ All notable user-facing changes to MTPLX. The format is based on
   resolves on its own; two tests keep the table equal to the catalog.
 
 ### Fixed
+
+- **A busy daemon is no longer reaped as dead** (issue #487, HenriGrimm).
+  The app's watchdog killed a live daemon whose generation-final prefix
+  commit took 19-25 s on a 110-150k vision agent session: two missed health
+  probes were read as death while the commit succeeded. The watchdog now
+  reaps only when the daemon's process is gone, its port stops accepting
+  connections, or it has been silent for 90 s; a refresh or a chat stream
+  that fails once goes through the same gate. The slow commit itself is
+  fixed too: a prompt whose screenshots exceeded the vision embed cache's
+  row budget evicted its own images and re-ran the tower for every one on
+  the model-owner thread; the prompt's images are pinned for the pass, and
+  the commit records the wall of each phase in the flight event so a slow
+  commit names its phase.
+- **Gemma 4 warm turns restore across rewritten conversation turns**
+  (PR #283, Craig Tollifson). The Gemma 4 prompt path now uses the session
+  bank's near-prefix restore, so an edited or re-rendered turn no longer
+  re-prefills the whole conversation. Two exactness holes in the sliding
+  window trim it relies on were closed on the way in: a restored entry's
+  trim outside the last-update rollback left stale rows in the buffer that
+  the next step counted as history, and the bank's identity for a Gemma 4
+  entry now comes from the runtime's declared history policy, never a
+  literal, so AR-only sessions cannot hit a policy mismatch.
 
 - **A wedged daemon of the app's own no longer moves the configured port,
   and a port fallback is never saved** (issue #503). After a hard freeze
