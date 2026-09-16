@@ -96,6 +96,7 @@ PUBLIC_COMMANDS = (
     ("status", "Check install, model, and integration health"),
     ("stop", "Stop the MTPLX daemon answering on a port"),
     ("settings", "Get or set live daemon settings"),
+    ("gc", "Reclaim orphaned SessionBank SSD cache files (--apply to delete)"),
     ("inspect", "Check whether a model is MTPLX-compatible"),
     ("trace", "Diagnose coding sessions: timelines, TPS curves, autopsies, live status"),
     ("forge", "Forge, verify, brand, discover, and publish MTP models"),
@@ -901,6 +902,12 @@ def cmd_tune_public(args: argparse.Namespace) -> int:
 
 def cmd_stop_public(args: argparse.Namespace) -> int:
     from .commands.public import cmd_stop_public as handler
+
+    return handler(args)
+
+
+def cmd_gc_public(args: argparse.Namespace) -> int:
+    from .commands.public import cmd_gc_public as handler
 
     return handler(args)
 
@@ -2492,6 +2499,34 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="Emit machine-readable JSON"
     )
     stop_p.set_defaults(func=cmd_stop_public)
+
+    gc_p = sub.add_parser(
+        "gc",
+        help="Reconcile the SessionBank SSD cache against its manifest and "
+        "reclaim orphaned files (#493)",
+    )
+    gc_p.add_argument(
+        "--dir",
+        default=None,
+        help="SessionBank directory (default: ~/.mtplx/session-bank)",
+    )
+    gc_p.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually delete orphaned files. Without this, only reports "
+        "what would be deleted.",
+    )
+    gc_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Proceed with --apply even if a MTPLX server appears to be "
+        "running (a session it commits mid-scan could lose its blobs).",
+    )
+    gc_p.add_argument("--host", default="127.0.0.1")
+    gc_p.add_argument(
+        "--json", action="store_true", help="Emit machine-readable JSON"
+    )
+    gc_p.set_defaults(func=cmd_gc_public)
 
     settings_p = sub.add_parser(
         "settings",
