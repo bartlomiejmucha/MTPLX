@@ -10,8 +10,10 @@ free disk rarely reaches.
 These tests build a session-bank directory by hand (manifest.sqlite +
 entries/ + blobs/, the same on-disk shape ``cache_bank/cold_tier.py``
 produces) rather than constructing a real ``SessionBankColdTier`` -- the
-whole point of ``session_bank_gc.py`` is that it does not import that class
-or its MLX-touching codec dependency.
+whole point of ``cache_bank/reconcile.py`` is that it does not import that
+class or its MLX-touching codec dependency. The tier's own use of the same
+walk (startup pass, cap accounting, in-flight protection) is covered in
+``test_cold_tier_reconcile.py``.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
-from mtplx.session_bank_gc import collect_garbage
+from mtplx.cache_bank.reconcile import collect_garbage
 
 SCHEMA = """
 CREATE TABLE entries (

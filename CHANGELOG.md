@@ -8,6 +8,14 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Added
 
+- **`mtplx gc` reclaims orphaned SSD session-cache files** (PR #502,
+  ArctifoxNL; issue #493). `mtplx gc` reports the live entries, the bytes on
+  disk and everything in `~/.mtplx/session-bank/` that the manifest no
+  longer reaches; `--apply` deletes it, `--force` allows that beside a
+  running daemon, `--json` is machine-readable and `--dir` points it at
+  another store. It needs neither MLX nor a model. The walk it runs is the
+  same one the daemon uses (`mtplx/cache_bank/reconcile.py`), so the command
+  and the engine cannot disagree about what is garbage.
 - **Idle limit for the warm session cache** (issue #481). Nothing in the
   daemon dropped warm state on a five- or ten-minute clock (the only idle
   timer is one hour; the ten-minute window orders eviction victims under
@@ -69,6 +77,24 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
+- **The SSD session cache reconciles itself and its cap means the whole
+  directory** (issue #493; three reports: 394,155 orphaned blobs, 44.1 GB,
+  against 17 entries after three weeks; 471,541 blobs, 67 GB, on a 60 GB cap
+  after three days of uptime). The reconciliation that deletes files the
+  manifest no longer reaches only ran when a write found the store near its
+  cap, which a generous cap never reached; and after each cleanup the cap
+  gate assumed every unaccounted byte was gone, although blobs still shared
+  by a later snapshot of the same conversation stay on disk when the entry
+  that paid for them is evicted, so the directory could sit above
+  `--ssd-session-cache-max-size` for good. The daemon now reconciles the
+  store in the background every time it opens the cache (yielding to
+  requests, never blocking the boot or the first request; one
+  `mtplx_ssd_session_cache_reconcile` line in the daemon log says what it
+  reclaimed), the cap gate prices the directory as it is on disk, reclaims
+  garbage on the writer thread before it would evict live entries for the
+  room, and never walks the store on the request thread. Blobs of a write in
+  flight, and blobs a row committed during a pass names, are never deleted.
+  `docs/server.md` documents the cap, the pass and `mtplx gc`.
 - **A reply's own whitespace no longer breaks its warm restore.** The
   visible content of a reply is served with its leading and trailing
   whitespace removed, so a client's echo could never carry the model's

@@ -155,6 +155,49 @@ A long conversation that starts over after a pause is a cache *miss*, not an
 expiry: open `/health` right after the slow turn and read
 `session_bank.last_miss_reason` and `last_prefix_diagnostic`.
 
+## SSD session cache (cold tier) limits
+
+Committed sessions are also written to `~/.mtplx/session-bank/` (or
+`--ssd-session-cache-dir`) so they restore after a restart. The store is
+content-addressed: `entries/` holds one `payload.json` per snapshot naming
+the `blobs/` files that make it up, and `manifest.sqlite` names the entries
+a restore may use. A blob shared by several snapshots of one conversation is
+stored once.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `--ssd-session-cache {on,write-only,off}` | `on` | Whether sessions are written to and restored from SSD. |
+| `--ssd-session-cache-max-size` | `100GB` (`32GB` on 64 GB Macs, `24GB` on 32 GB, `16GB` on 16 GB) | Cap on the **whole** store directory as it sits on disk, orphaned files included. The effective cap is `min(this, free_disk / 4)`, and writes stop below 10 GiB free. When a write would take the store over the cap, garbage is reclaimed first and only then are the least recently used entries evicted. |
+| `MTPLX_SSD_WRITE_BUDGET_PER_HOUR` | `64G` | Rolling one-hour byte budget for SSD writes (SSD wear); writes beyond it are skipped for the hour. |
+| `MTPLX_SSD_WRITER_BACKLOG_BYTES` | `4G` | Bytes of encoded snapshots the writer may hold in RAM while waiting to write; larger single entries stream to disk instead. |
+
+**Orphaned files.** A crash between a blob write and its manifest row, an
+interrupted write, or a blob whose last entry was evicted while a sibling
+still shared it can leave files the manifest no longer reaches. The daemon
+reconciles the store against its manifest every time it opens the cache:
+a background pass that yields to requests, deletes what nothing names, and
+prints one `mtplx_ssd_session_cache_reconcile` line to the daemon log with
+what it reclaimed and what the store holds. The same pass runs whenever a
+write finds the store over its cap. `/health` reports the store under
+`ssd_session_cache` (`entries`, `managed_disk_bytes`, `orphan_disk_bytes`,
+`orphan_cleanup_runs`, `startup_reconcile`).
+
+To inspect or clean a store by hand, with or without a daemon running:
+
+```bash
+mtplx gc            # report: live entries, bytes on disk, what is orphaned
+mtplx gc --apply    # delete the orphaned files (refuses while a daemon runs)
+mtplx gc --apply --force   # ...even beside a running daemon
+mtplx gc --dir /path/to/session-bank --json
+```
+
+`mtplx gc` needs no MLX and no model: it reads `manifest.sqlite` and the
+directory tree. `--apply` refuses to run while a daemon answers on the
+default ports, because an out-of-process pass cannot see that daemon's
+writes in flight; `--force` overrides that when you know the daemon is idle.
+`--dir` defaults to the `ssd_session_cache_dir` in your saved config, then
+`~/.mtplx/session-bank`.
+
 ## Sharing on your network (other devices, Parallels/VM guests)
 
 The default bind is `127.0.0.1`: only this Mac can connect. To reach MTPLX

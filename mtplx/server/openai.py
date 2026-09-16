@@ -3693,11 +3693,25 @@ def _session_bank_cold_tier_from_args(args: argparse.Namespace) -> Any | None:
         )
         or DEFAULT_COLD_TIER_MIN_PREFIX_TOKENS
     )
+    console = bool(getattr(args, "server_console", False))
+
+    def _reconcile_event(summary: dict[str, Any]) -> None:
+        # One line per daemon start (#493): what the store held and what the
+        # opening reconciliation reclaimed. Same stdout event stream as
+        # mtplx_openai_generation, so the app's daemon log carries it.
+        if console:
+            return
+        _safe_stdout_print(
+            json.dumps({"event": "mtplx_ssd_session_cache_reconcile", **summary}),
+            flush=True,
+        )
+
     return SessionBankColdTier(
         base_dir=cache_dir,
         mode=mode,
         max_bytes=max_bytes,
         min_prefix_tokens=min_prefix_tokens,
+        reconcile_listener=_reconcile_event,
     )
 
 
