@@ -248,6 +248,70 @@ def test_per_session_auto_clamped_by_ram_tier_big_box(monkeypatch):
     assert es.resolve_session_bank_per_session_bytes(48 * GIB) == 24 * GIB
 
 
+def _plan(usable_gib: float, weights_gib: float):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        available=True,
+        usable_bytes=int(usable_gib * GIB),
+        model_weights_bytes=int(weights_gib * GIB),
+    )
+
+
+@pytest.mark.parametrize(
+    ("ram_gib", "usable_gib", "weights_gib", "budget_gib", "expected_gib", "seat"),
+    [
+        # PR #496 (Dizzler7) asked for a flat 32 GiB so a 12.2 GiB Q8-KV
+        # 100k-token 27B snapshot persists. The plan sizes that ask by the
+        # machine: (usable - weights - 3 GiB transients) / 2, under 2/3 of
+        # the bank budget.
+        (64, 48, 18.6, 26.4, 13.2, "64 GB + 27B: the 12.2 GiB snapshot fits"),
+        (128, 96, 18.6, 48, 32, "128 GB + 27B: play allows 37.2, budget rule holds 32"),
+        (128, 96, 72, 21, 10.5, "128 GB + Flash-Next: 10.5, below the old 24 flat"),
+        (48, 36, 18.6, 14.4, 7.2, "48 GB + 27B: 7.2, below the old 8 flat"),
+    ],
+)
+def test_per_session_auto_is_the_plan_play_ceiling(
+    monkeypatch, ram_gib, usable_gib, weights_gib, budget_gib, expected_gib, seat
+):
+    monkeypatch.delenv("MTPLX_SESSION_BANK_PER_SESSION_BYTES", raising=False)
+    es = _es_with_ram(monkeypatch, ram_gib * GIB)
+    plan = _plan(usable_gib, weights_gib)
+    resolved = es.resolve_session_bank_per_session_bytes(
+        int(budget_gib * GIB), memory_plan=plan
+    )
+    assert resolved == pytest.approx(expected_gib * GIB, abs=GIB // 1024), seat
+
+
+def test_per_session_play_ceiling_needs_a_usable_plan(monkeypatch):
+    from types import SimpleNamespace
+
+    es = _es_with_ram(monkeypatch, 64 * GIB)
+    assert es.per_session_play_ceiling_bytes(None) is None
+    assert es.per_session_play_ceiling_bytes(SimpleNamespace(available=False)) is None
+    assert (
+        es.per_session_play_ceiling_bytes(
+            SimpleNamespace(available=True, usable_bytes=0, model_weights_bytes=1)
+        )
+        is None
+    )
+    # A plan with no play left still floors at 1 GiB: the live-ref lease
+    # covers the rest, the gate never goes below the floor.
+    assert es.per_session_play_ceiling_bytes(_plan(20, 19)) == GIB
+
+
+def test_per_session_explicit_env_wins_over_the_plan_ceiling(monkeypatch):
+    monkeypatch.setenv("MTPLX_SESSION_BANK_PER_SESSION_BYTES", "20G")
+    es = _es_with_ram(monkeypatch, 64 * GIB)
+    # Explicit values keep their semantics, clamped to the auto budget.
+    assert (
+        es.resolve_session_bank_per_session_bytes(
+            int(26.4 * GIB), memory_plan=_plan(48, 18.6)
+        )
+        == 20 * GIB
+    )
+
+
 def test_memory_budget_env_tightens_auto_budget(monkeypatch):
     monkeypatch.delenv("MTPLX_SESSION_BANK_MAX_BYTES", raising=False)
     monkeypatch.setenv("MTPLX_MEMORY_BUDGET", "32G")
