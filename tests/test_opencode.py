@@ -20,6 +20,7 @@ from mtplx.opencode import (
     opencode_session_headers_plugin_path,
     repair_opencode_desktop_state,
     write_opencode_config,
+    write_opencode_session_headers_plugin,
 )
 
 
@@ -374,13 +375,19 @@ def test_write_opencode_config_installs_session_headers_plugin(tmp_path, monkeyp
     assert payload["provider"]["mtplx"]["options"]["headers"]["x-mtplx-client"] == "opencode"
     plugin_path = str(opencode_session_headers_plugin_path(path))
     assert plugin_path in payload["plugin"]
-    assert (path.parent / "mtplx-session-headers.js").exists()
+    package = Path(plugin_path)
+    assert package.parent.name == "plugins"
+    assert json.loads((package / "package.json").read_text())["exports"] == {
+        ".": "./index.js", "./server": "./server.js"
+    }
+    assert (package / "server.js").exists()
+    assert str(path.parent / "mtplx-session-headers.js") not in payload["plugin"]
     assert result["reasoning_visibility"]["path"] == str(settings_store)
     assert result["reasoning_visibility"]["did_change"] is True
     assert payload["provider"]["mtplx"]["models"]
     assert result["session_headers_plugin_path"] == plugin_path
     assert not (path.parent / "package.json").exists()
-    plugin_source = (path.parent / "mtplx-session-headers.js").read_text(
+    plugin_source = (package / "index.js").read_text(
         encoding="utf-8"
     )
     assert 'output.headers["x-mtplx-session-id"]' in plugin_source
@@ -408,6 +415,43 @@ def test_write_opencode_config_installs_session_headers_plugin(tmp_path, monkeyp
     assert "output.topP === mtplxInjectedQwenTopP" in plugin_source
     assert "process.stdout.write" not in plugin_source
     assert "message.updated" not in plugin_source
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_plugin_package_registers_v1_and_provider_scoped_v2_headers(tmp_path):
+    package = write_opencode_session_headers_plugin(tmp_path / "opencode.json")
+    script = f"""
+import plugin from {json.dumps((package / 'server.js').as_uri())};
+import legacy from {json.dumps((package / 'index.js').as_uri())};
+const registrations = [];
+await plugin.setup({{session: {{hook: async (...args) => registrations.push(args)}}}});
+const [name, callback, filter] = registrations[0];
+const event = {{sessionID: 'ses_v2', headers: {{existing: 'kept'}},
+  model: {{providerID: 'mtplx', id: 'flash'}}, kind: 'primary'}};
+await callback(event);
+const hooks = await plugin.server();
+const output = {{headers: {{existing: 'kept'}}}};
+await hooks['chat.headers']({{sessionID: 'ses_v1', model: {{providerID: 'mtplx'}},
+  message: {{id: 'msg_user'}}}}, output);
+console.log(JSON.stringify({{id: plugin.id, name, filter, count: registrations.length,
+  sameLegacy: plugin.server === legacy, event, output}}));
+"""
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", script],
+        capture_output=True, text=True, check=True,
+    )
+    data = json.loads(result.stdout)
+    assert data["sameLegacy"] is True
+    assert data["count"] == 1
+    assert data["name"] == "model.request"
+    assert data["filter"] == {"providerID": "mtplx"}
+    assert data["event"]["headers"] == {
+        "existing": "kept", "x-mtplx-client": "opencode",
+        "x-mtplx-session-id": "ses_v2",
+    }
+    assert data["output"]["headers"]["x-mtplx-session-id"] == "ses_v1"
+    assert data["output"]["headers"]["x-mtplx-client-turn-id"] == "msg_user"
+    assert set(data["event"]) == {"sessionID", "headers", "model", "kind"}
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")

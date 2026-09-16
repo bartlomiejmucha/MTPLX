@@ -74,6 +74,7 @@ OPENCODE_OPENAI_COMPATIBLE_DEFAULT_EFFORTS = (
     "xhigh",
 )
 OPENCODE_SESSION_HEADERS_PLUGIN_NAME = "mtplx-session-headers.js"
+OPENCODE_SESSION_HEADERS_PACKAGE_NAME = "mtplx-session-headers"
 OPENCODE_DESKTOP_SETTINGS_STORE_NAME = "default.dat"
 OPENCODE_DESKTOP_SETTINGS_KEY = "settings.v3"
 OPENCODE_DESKTOP_GLOBAL_STORE_NAME = "opencode.global.dat"
@@ -136,6 +137,22 @@ export default MTPLXSessionHeaders;
 )
 
 
+OPENCODE_SESSION_HEADERS_V2_SOURCE = """// Older V1 imports index.js; modern V1 and V2 resolve this entrypoint.
+// No prompt, tool-schema or generation-option rewriting belongs here.
+import { MTPLXSessionHeaders } from "./index.js";
+export default {
+  id: "mtplx.session-headers",
+  server: MTPLXSessionHeaders,
+  async setup(ctx) {
+    await ctx.session.hook("model.request", (event) => {
+      event.headers["x-mtplx-client"] = "opencode";
+      event.headers["x-mtplx-session-id"] = String(event.sessionID);
+    }, { providerID: "mtplx" });
+  }
+};
+"""
+
+
 def opencode_config_path(path: str | Path | None = None) -> Path:
     """Return OpenCode's JSON config path.
 
@@ -152,9 +169,12 @@ def opencode_config_path(path: str | Path | None = None) -> Path:
 
 
 def opencode_session_headers_plugin_path(path: str | Path | None = None) -> Path:
-    """Return the MTPLX-owned OpenCode plugin path next to opencode.json."""
+    """Return the managed package, discoverable by V2 and configured for V1."""
 
-    return opencode_config_path(path).parent / OPENCODE_SESSION_HEADERS_PLUGIN_NAME
+    return (
+        opencode_config_path(path).parent / "plugins"
+        / OPENCODE_SESSION_HEADERS_PACKAGE_NAME
+    )
 
 
 def opencode_desktop_settings_store_path(path: str | Path | None = None) -> Path:
@@ -407,7 +427,10 @@ def merge_opencode_config(
             if not (
                 isinstance(item, str)
                 and item != plugin_path
-                and Path(item).name == OPENCODE_SESSION_HEADERS_PLUGIN_NAME
+                and Path(item).name in {
+                    OPENCODE_SESSION_HEADERS_PLUGIN_NAME,
+                    OPENCODE_SESSION_HEADERS_PACKAGE_NAME,
+                }
             )
         ]
         if plugin_path not in [item for item in plugins if isinstance(item, str)]:
@@ -650,23 +673,35 @@ def _unique_backup(path: Path, reason: str) -> Path:
 def write_opencode_session_headers_plugin(
     path: str | Path | None = None,
 ) -> Path:
-    """Install the tiny MTPLX OpenCode plugin that carries session headers."""
+    """Install versioned entrypoints without dropping older V1 support.
+
+    V1 imports the package main (the original function API); V2's plugin
+    host resolves the server subpath first. Both use the same registration
+    path. See opencode.ai/v2/docs/build/plugins/migrate-v1 and @opencode/plugin
+    Host.resolve. No npm dependency or runtime version sniffing is needed.
+    """
 
     plugin_path = opencode_session_headers_plugin_path(path)
-    plugin_path.parent.mkdir(parents=True, exist_ok=True)
-    if (
-        not plugin_path.exists()
-        or plugin_path.read_text(encoding="utf-8")
-        != OPENCODE_SESSION_HEADERS_PLUGIN_SOURCE
-    ):
-        plugin_path.write_text(
-            OPENCODE_SESSION_HEADERS_PLUGIN_SOURCE,
-            encoding="utf-8",
-        )
-    try:
-        plugin_path.chmod(0o600)
-    except OSError:
-        pass
+    plugin_path.mkdir(parents=True, exist_ok=True)
+    files = {
+        "package.json": json.dumps({
+            "name": OPENCODE_SESSION_HEADERS_PACKAGE_NAME,
+            "private": True,
+            "type": "module",
+            "main": "./index.js",
+            "exports": {".": "./index.js", "./server": "./server.js"},
+        }, indent=2) + "\n",
+        "index.js": OPENCODE_SESSION_HEADERS_PLUGIN_SOURCE,
+        "server.js": OPENCODE_SESSION_HEADERS_V2_SOURCE,
+    }
+    for name, source in files.items():
+        target = plugin_path / name
+        if not target.exists() or target.read_text(encoding="utf-8") != source:
+            target.write_text(source, encoding="utf-8")
+        try:
+            target.chmod(0o600)
+        except OSError:
+            pass
     return plugin_path
 
 
