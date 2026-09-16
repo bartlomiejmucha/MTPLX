@@ -1022,6 +1022,7 @@
 "Port %@ is held by an MTPLX server started outside the app. Press Ctrl-C in its terminal or run `mtplx stop --port %@`, then press Play." = "端口 %1$@ 被应用外部启动的 MTPLX 服务器占用。在其终端中按 Ctrl-C 或运行 `mtplx stop --port %2$@`，然后按“播放”。";
 "Port %@ is running another MTPLX server. Stop it where it was started, or run `mtplx stop --port %@` in Terminal, then press Play." = "端口 %1$@ 正在运行另一个 MTPLX 服务器。请在启动它的位置将其停止，或在 Terminal 中运行 `mtplx stop --port %2$@`，然后按“播放”。";
 "Port %@ was busy. MTPLX now uses port %@." = "端口 %1$@ 忙。MTPLX 现在使用端口 %2$@。";
+"Port %@ was in use by %@. MTPLX is using port %@ for now; the port in Settings is unchanged and will be tried again at the next start." = "端口 %@ 曾被 %@ 占用。MTPLX 暂时使用端口 %@；设置中的端口保持不变，下次启动时会再次尝试。";
 "Port %@ was in use by %@. MTPLX now uses port %@." = "端口 %1$@ 已被 %2$@ 使用。MTPLX 现在使用端口 %3$@。";
 "Port changed" = "端口已更改";
 "Port is already used by another local app (%@)." = "端口已被另一个本地应用占用 (%@)。";

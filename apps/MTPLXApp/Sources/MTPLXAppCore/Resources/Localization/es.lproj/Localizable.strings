@@ -1014,6 +1014,7 @@
 "Port %@ is held by an MTPLX server started outside the app. Press Ctrl-C in its terminal or run `mtplx stop --port %@`, then press Play." = "El puerto %@ está ocupado por un servidor MTPLX iniciado fuera de la app. Pulsa Ctrl-C en su terminal o ejecuta `mtplx stop --port %@` y luego pulsa Reproducir.";
 "Port %@ is running another MTPLX server. Stop it where it was started, or run `mtplx stop --port %@` in Terminal, then press Play." = "En el puerto %@ se ejecuta otro servidor MTPLX. Deténlo donde se inició o ejecuta `mtplx stop --port %@` en Terminal y luego pulsa Reproducir.";
 "Port %@ was busy. MTPLX now uses port %@." = "El puerto %@ estaba ocupado. MTPLX ahora usa el puerto %@.";
+"Port %@ was in use by %@. MTPLX is using port %@ for now; the port in Settings is unchanged and will be tried again at the next start." = "El puerto %@ estaba en uso por %@. MTPLX usa por ahora el puerto %@; el puerto de Ajustes no cambia y se volverá a intentar en el próximo inicio.";
 "Port %@ was in use by %@. MTPLX now uses port %@." = "El puerto %@ estaba en uso por %@. MTPLX ahora usa el puerto %@.";
 "Port changed" = "Puerto cambiado";
 "Port is already used by another local app (%@)." = "El puerto ya está en uso por otra app local (%@).";

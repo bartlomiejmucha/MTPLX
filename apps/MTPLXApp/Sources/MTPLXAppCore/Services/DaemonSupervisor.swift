@@ -1358,48 +1358,62 @@ public final class DaemonSupervisor: @unchecked Sendable {
         _ pid: pid_t,
         launchID: String
     ) -> Bool {
+        appLaunchID(ofProcess: pid) == launchID
+    }
+
+    /// The `MTPLX_APP_LAUNCH_ID` this app gave `pid` at launch, or nil when
+    /// the process carries no marker (a stranger's process, a CLI-started
+    /// `mtplx serve`) or its argv/env image cannot be read. Read from the
+    /// kernel's own image (KERN_PROCARGS2), never from ps text, so an
+    /// argument that merely contains the token cannot pass as ownership.
+    /// Issue #503 uses this to tell a wedged daemon of ours from another app.
+    static func appLaunchID(ofProcess pid: pid_t) -> String? {
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
         var byteCount = 0
         guard sysctl(&mib, UInt32(mib.count), nil, &byteCount, nil, 0) == 0,
               byteCount > MemoryLayout<Int32>.size
-        else { return false }
+        else { return nil }
 
         var bytes = [UInt8](repeating: 0, count: byteCount)
         guard bytes.withUnsafeMutableBytes({ buffer in
             sysctl(&mib, UInt32(mib.count), buffer.baseAddress, &byteCount, nil, 0)
         }) == 0
-        else { return false }
-        guard byteCount <= bytes.count else { return false }
+        else { return nil }
+        guard byteCount <= bytes.count else { return nil }
         bytes.removeSubrange(byteCount..<bytes.count)
-        guard bytes.count >= MemoryLayout<Int32>.size else { return false }
+        guard bytes.count >= MemoryLayout<Int32>.size else { return nil }
 
         let argc = bytes.withUnsafeBytes {
             Int($0.loadUnaligned(fromByteOffset: 0, as: Int32.self))
         }
-        guard argc >= 0 else { return false }
+        guard argc >= 0 else { return nil }
         var cursor = MemoryLayout<Int32>.size
-        guard skipCString(in: bytes, cursor: &cursor) else { return false }
+        guard skipCString(in: bytes, cursor: &cursor) else { return nil }
         while cursor < bytes.count, bytes[cursor] == 0 {
             cursor += 1
         }
         for _ in 0..<argc {
-            guard skipCString(in: bytes, cursor: &cursor) else { return false }
+            guard skipCString(in: bytes, cursor: &cursor) else { return nil }
         }
 
-        let expected = Array("MTPLX_APP_LAUNCH_ID=\(launchID)".utf8)
+        let prefix = Array("MTPLX_APP_LAUNCH_ID=".utf8)
         while cursor < bytes.count {
             while cursor < bytes.count, bytes[cursor] == 0 {
                 cursor += 1
             }
             guard cursor < bytes.count else { break }
             let start = cursor
-            guard skipCString(in: bytes, cursor: &cursor) else { return false }
+            guard skipCString(in: bytes, cursor: &cursor) else { return nil }
             let end = cursor - 1
-            if bytes[start..<end].elementsEqual(expected) {
-                return true
-            }
+            let entry = bytes[start..<end]
+            guard entry.count > prefix.count,
+                  entry.prefix(prefix.count).elementsEqual(prefix)
+            else { continue }
+            let value = String(decoding: entry.dropFirst(prefix.count), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
         }
-        return false
+        return nil
     }
 
     private static func skipCString(

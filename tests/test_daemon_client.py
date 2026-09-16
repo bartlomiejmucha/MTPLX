@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import signal
 import socket
+import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -255,6 +258,94 @@ def test_port_busy_advice_is_occupant_aware():
 
     foreign = port_busy_advice(PortOccupant(kind=PORT_FOREIGN), port=8000)
     assert any("another app" in line for line in foreign)
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def test_port_busy_advice_names_a_wedged_app_daemon_by_pid():
+    from mtplx.daemon_client import ForeignListener
+
+    wedged = port_busy_advice(
+        PortOccupant(kind=PORT_FOREIGN),
+        port=8001,
+        listener=ForeignListener(pid=4242, launch_id="launch-abc"),
+    )
+    assert any("4242" in line and "no longer answering" in line for line in wedged)
+    assert any("kill 4242" in line for line in wedged)
+    assert not any("another app" in line for line in wedged)
+
+    stranger = port_busy_advice(
+        PortOccupant(kind=PORT_FOREIGN),
+        port=8001,
+        listener=ForeignListener(pid=77, launch_id=None),
+    )
+    assert any("another app" in line and "pid 77" in line for line in stranger)
+
+
+def _wedged_listener(port: int, launch_id: str | None) -> subprocess.Popen:
+    """A listener that accepts connections and never answers (issue #503),
+    spawned with the app's launch marker in its environment like a daemon."""
+
+    env = dict(os.environ)
+    env.pop("MTPLX_APP_LAUNCH_ID", None)
+    if launch_id:
+        env["MTPLX_APP_LAUNCH_ID"] = launch_id
+    script = (
+        "import socket, time\n"
+        "s = socket.socket()\n"
+        "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+        f"s.bind(('127.0.0.1', {port}))\n"
+        "s.listen(16)\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(600)\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", script],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    assert proc.stdout is not None
+    assert proc.stdout.readline().strip() == "ready"
+    return proc
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="KERN_PROCARGS2 and lsof are Darwin")
+def test_describe_foreign_listener_tells_the_apps_wedged_daemon_from_a_stranger():
+    from mtplx.daemon_client import describe_foreign_listener, process_app_launch_id
+
+    port = _free_port()
+    ours = _wedged_listener(port, "cli-wedged-launch")
+    try:
+        assert classify_port_occupant("127.0.0.1", port, timeout=0.5).kind == PORT_FOREIGN
+        assert process_app_launch_id(ours.pid) == "cli-wedged-launch"
+        listener = describe_foreign_listener(port)
+        assert listener is not None
+        assert listener.pid == ours.pid
+        assert listener.launch_id == "cli-wedged-launch"
+        assert listener.owned_by_app
+    finally:
+        ours.kill()
+        ours.wait(timeout=5)
+
+    port = _free_port()
+    stranger = _wedged_listener(port, None)
+    try:
+        assert process_app_launch_id(stranger.pid) is None
+        listener = describe_foreign_listener(port)
+        assert listener is not None
+        assert listener.pid == stranger.pid
+        assert listener.launch_id is None
+        assert not listener.owned_by_app
+    finally:
+        stranger.kill()
+        stranger.wait(timeout=5)
+    assert describe_foreign_listener(port) is None
 
 
 def test_find_free_port_skips_bound_ports():

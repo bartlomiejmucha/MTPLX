@@ -253,9 +253,18 @@ public final class MTPLXBackendStore: ObservableObject {
     @Published public private(set) var piTerminalLaunchCommand: String?
     @Published public private(set) var piTerminalLaunchDetail: String?
     @Published public private(set) var clientHandoffNotice: ClientHandoffNotice?
-    /// One-line banner shown after the configured port was occupied and the
-    /// daemon moved to the next free port (persisted to settings).
+    /// Banner shown while a launch runs on a fallback port because the
+    /// configured one was occupied. Stays until the next user-initiated
+    /// start; the fallback itself is never persisted (issue #503).
     @Published public private(set) var portFallbackNotice: String?
+    /// Issue #503: the configured port while a launch runs on a fallback
+    /// port. A relocated port used to be saved to settings, so one wedged
+    /// daemon at one restart moved every client pinned to the configured
+    /// port for good. Settings keep the configured port, every
+    /// user-initiated start tries it again, and a save made meanwhile
+    /// writes the configured port back unless the user changed the port on
+    /// purpose (see `persistConfiguration`).
+    private var activePortFallback: (configured: Int, fallback: Int)?
     /// One-line, dismissable banner shown when `settings.json` could not be
     /// read at launch and was set aside (see `loadPersistedSettings`).
     @Published public private(set) var settingsRecoveryNotice: SettingsRecoveryNotice?
@@ -503,7 +512,7 @@ public final class MTPLXBackendStore: ObservableObject {
         configuration = next
         seedLiveSettingsFromConfiguration(next)
         supervisor.setAutomaticRestartEnabled(next.automaticDaemonRestart)
-        try settingsStore.save(next)
+        try persistConfiguration(next)
     }
 
     /// Commit a Performance mode pick straight to settings.json.
@@ -574,7 +583,7 @@ public final class MTPLXBackendStore: ObservableObject {
         let shouldRestart = restartIfRunning && supervisor.isRunning()
         let target = LaunchTarget(rawValue: next.lastLaunchTarget)
         configuration = next
-        try settingsStore.save(next)
+        try persistConfiguration(next)
         supervisor.setAutomaticRestartEnabled(next.automaticDaemonRestart)
         if !shouldRestart, restartIfRunning, wasDegraded {
             // Degraded chrome means the user believes MTPLX is (or should
@@ -785,6 +794,15 @@ public final class MTPLXBackendStore: ObservableObject {
     public func startDaemon(target: LaunchTarget?) async {
         clientHandoffNotice = nil
         portFallbackNotice = nil
+        if let fallback = activePortFallback {
+            // Issue #503: a fallback lives for one launch. The user pressed
+            // Play again, so the configured port gets another try (the
+            // occupant may be gone) and the notice above goes with it.
+            var next = configuration
+            next.port = fallback.configured
+            configuration = next
+            activePortFallback = nil
+        }
         await startDaemon(target: target, attemptedPortRemediation: false)
     }
 
@@ -820,7 +838,7 @@ public final class MTPLXBackendStore: ObservableObject {
             var next = configuration
             next.lastLaunchTarget = target.rawValue
             configuration = next
-            try? settingsStore.save(next)
+            try? persistConfiguration(next)
         }
         if promptForModelDownloadIfNeeded(
             configuration: configuration,
@@ -1046,6 +1064,34 @@ public final class MTPLXBackendStore: ObservableObject {
         case .unauthorized:
             occupantDescription = tr("a server requiring a different API key")
         case .foreign:
+            // Issue #503: a daemon this app launched that wedged
+            // mid-inference keeps its listener while /health never answers,
+            // so by probe alone it reads as "another app" and the app moved
+            // off its own port. Process identity settles it: the launch
+            // marker the supervisor puts in every daemon's environment.
+            let port = configuration.port
+            let wedged = await Task.detached(priority: .userInitiated) {
+                PortPreflight.appOwnedListener(port: port)
+            }.value
+            if let wedged {
+                await supervisor.logs.append(
+                    "port preflight: \(port) held by a wedged app-owned daemon "
+                    + "pid \(wedged.pid) (launch \(wedged.launchID)); reaping it and keeping the port",
+                    stream: .system
+                )
+                await supervisor.terminateExternalDaemon(rootPID: wedged.pid)
+                if await PortPreflight.waitUntilBindable(
+                    port,
+                    bindHost: configuration.host,
+                    timeoutSeconds: 5
+                ) {
+                    return
+                }
+                await supervisor.logs.append(
+                    "port preflight: \(port) still held after reaping pid \(wedged.pid)",
+                    stream: .system
+                )
+            }
             occupantDescription = tr("another app")
         }
         let occupiedPort = configuration.port
@@ -1058,16 +1104,47 @@ public final class MTPLXBackendStore: ObservableObject {
             // No port available; let supervisor.start surface the failure.
             return
         }
+        applyPortFallback(from: occupiedPort, to: freePort, occupant: occupantDescription)
+        await supervisor.logs.append(
+            "port preflight: \(occupiedPort) occupied by \(occupantDescription); "
+            + "using \(freePort) for this launch, settings keep \(occupiedPort)",
+            stream: .system
+        )
+    }
+
+    /// Issue #503: run this launch on `freePort` without touching settings.
+    /// `activePortFallback` remembers the configured port so a save made
+    /// meanwhile writes it back and the next start tries it again.
+    private func applyPortFallback(from occupiedPort: Int, to freePort: Int, occupant: String) {
         var next = configuration
         next.port = freePort
         configuration = next
-        try? settingsStore.save(next)
-        portFallbackNotice =
-            tr("Port %@ was in use by %@. MTPLX now uses port %@.", String(occupiedPort), occupantDescription, String(freePort))
-        await supervisor.logs.append(
-            "port preflight: \(occupiedPort) occupied by \(occupantDescription); switched to \(freePort)",
-            stream: .system
+        activePortFallback = (
+            configured: activePortFallback?.configured ?? occupiedPort,
+            fallback: freePort
         )
+        portFallbackNotice = tr(
+            "Port %@ was in use by %@. MTPLX is using port %@ for now; the port in Settings is unchanged and will be tried again at the next start.",
+            String(occupiedPort),
+            occupant,
+            String(freePort)
+        )
+    }
+
+    /// Every settings write goes through here so a port fallback never
+    /// reaches disk (issue #503): while a launch runs on a fallback port the
+    /// configured port is written instead, unless `next` carries a port the
+    /// user chose on purpose, which ends the fallback.
+    private func persistConfiguration(_ next: MTPLXAppConfiguration) throws {
+        var toPersist = next
+        if let fallback = activePortFallback {
+            if next.port == fallback.fallback {
+                toPersist.port = fallback.configured
+            } else {
+                activePortFallback = nil
+            }
+        }
+        try settingsStore.save(toPersist)
     }
 
     /// How long a foreign-looking port is re-probed before it is moved
@@ -1114,14 +1191,10 @@ public final class MTPLXBackendStore: ObservableObject {
             else {
                 return false
             }
-            var next = configuration
-            next.port = freePort
-            configuration = next
-            try? settingsStore.save(next)
-            portFallbackNotice =
-                tr("Port %@ was busy. MTPLX now uses port %@.", String(occupiedPort), String(freePort))
+            applyPortFallback(from: occupiedPort, to: freePort, occupant: tr("another app"))
             await supervisor.logs.append(
-                "launch hit a port conflict on \(occupiedPort) the probe could not see; switched to \(freePort)",
+                "launch hit a port conflict on \(occupiedPort) the probe could not see; "
+                + "using \(freePort) for this launch, settings keep \(occupiedPort)",
                 stream: .system
             )
             return true
@@ -2069,7 +2142,7 @@ public final class MTPLXBackendStore: ObservableObject {
             next.prefillChunkTokens = prefillChunkTokens
         }
         configuration = next
-        try settingsStore.save(next)
+        try persistConfiguration(next)
     }
 
     private func persistDraftControlSelection(
@@ -2814,7 +2887,7 @@ public final class MTPLXBackendStore: ObservableObject {
             if next.model != installedPath {
                 next.model = installedPath
                 self.configuration = next
-                try? settingsStore.save(next)
+                try? persistConfiguration(next)
             }
             return false
         }

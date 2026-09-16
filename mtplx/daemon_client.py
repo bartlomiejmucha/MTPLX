@@ -16,6 +16,8 @@ import json
 import os
 import signal
 import socket
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -276,8 +278,142 @@ def wait_for_port_settle(
     return occupant
 
 
-def port_busy_advice(occupant: PortOccupant, *, port: int) -> list[str]:
-    """Actionable, occupant-aware copy for a busy port."""
+@dataclass(frozen=True)
+class ForeignListener:
+    """Who holds a port that does not answer ``/health`` (issue #503).
+
+    ``launch_id`` is the ``MTPLX_APP_LAUNCH_ID`` the macOS app gave the
+    process at launch: set, the "foreign" listener is one of our own daemons
+    that wedged (socket alive, ``/health`` dead); None, it is a stranger's
+    process or a CLI-started server. SYNC PAIR: PortPreflight.appOwnedListener
+    in the app resolves the same identity and reaps its own wedged daemon in
+    place; the CLI names it and leaves the process alone.
+    """
+
+    pid: int
+    launch_id: str | None
+
+    @property
+    def owned_by_app(self) -> bool:
+        return bool(self.launch_id)
+
+
+def listening_process_ids(port: int) -> list[int]:
+    """PIDs with a TCP listener on ``port`` (``/usr/sbin/lsof``; empty on failure)."""
+
+    try:
+        proc = subprocess.run(
+            ["/usr/sbin/lsof", "-nP", f"-iTCP:{int(port)}", "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pids: list[int] = []
+    for line in proc.stdout.splitlines():
+        try:
+            pid = int(line.strip())
+        except ValueError:
+            continue
+        if pid > 1:
+            pids.append(pid)
+    return pids
+
+
+def process_app_launch_id(pid: int) -> str | None:
+    """The ``MTPLX_APP_LAUNCH_ID`` in ``pid``'s environment, or None.
+
+    Read from the kernel's own argv/env image (``KERN_PROCARGS2``), never
+    from ``ps`` text, so an argument that merely contains the token cannot
+    pass as ownership. None off macOS, for another user's process, or for a
+    process without the marker.
+    """
+
+    if sys.platform != "darwin":
+        return None
+    try:
+        import ctypes
+        import ctypes.util
+
+        libc = ctypes.CDLL(ctypes.util.find_library("c"))
+        ctl_kern, kern_procargs2 = 1, 49
+        mib = (ctypes.c_int * 3)(ctl_kern, kern_procargs2, int(pid))
+        size = ctypes.c_size_t(0)
+        if libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0) != 0:
+            return None
+        buffer = ctypes.create_string_buffer(max(1, size.value))
+        if libc.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) != 0:
+            return None
+        raw = buffer.raw[: size.value]
+    except (OSError, AttributeError, ValueError):
+        return None
+    if len(raw) < 4:
+        return None
+    argc = int.from_bytes(raw[:4], "little", signed=True)
+    if argc < 0:
+        return None
+    cursor = 4
+
+    def skip_cstring(at: int) -> int | None:
+        end = raw.find(b"\0", at)
+        return None if end < 0 else end + 1
+
+    nxt = skip_cstring(cursor)  # the exec path
+    if nxt is None:
+        return None
+    cursor = nxt
+    while cursor < len(raw) and raw[cursor] == 0:
+        cursor += 1
+    for _ in range(argc):
+        nxt = skip_cstring(cursor)
+        if nxt is None:
+            return None
+        cursor = nxt
+    prefix = b"MTPLX_APP_LAUNCH_ID="
+    while cursor < len(raw):
+        while cursor < len(raw) and raw[cursor] == 0:
+            cursor += 1
+        if cursor >= len(raw):
+            break
+        end = raw.find(b"\0", cursor)
+        if end < 0:
+            end = len(raw)
+        entry = raw[cursor:end]
+        cursor = end + 1
+        if entry.startswith(prefix):
+            value = entry[len(prefix):].decode("utf-8", "replace").strip()
+            return value or None
+    return None
+
+
+def describe_foreign_listener(port: int) -> ForeignListener | None:
+    """Identity of the process holding a foreign-looking ``port``, or None."""
+
+    pids = listening_process_ids(port)
+    if not pids:
+        return None
+    for pid in pids:
+        launch_id = process_app_launch_id(pid)
+        if launch_id:
+            return ForeignListener(pid=pid, launch_id=launch_id)
+    return ForeignListener(pid=pids[0], launch_id=None)
+
+
+def port_busy_advice(
+    occupant: PortOccupant,
+    *,
+    port: int,
+    listener: ForeignListener | None = None,
+) -> list[str]:
+    """Actionable, occupant-aware copy for a busy port.
+
+    ``listener`` (``describe_foreign_listener``) turns the generic "another
+    app" line into the truth when the port is held by a daemon the macOS app
+    launched that stopped answering (issue #503): the pid, and how to clear
+    it, instead of a hunt through other apps.
+    """
 
     if occupant.kind == PORT_APP_DAEMON:
         model = occupant.daemon.model if occupant.daemon else None
@@ -292,6 +428,21 @@ def port_busy_advice(occupant: PortOccupant, *, port: int) -> list[str]:
             f"Port {port} is an MTPLX server started outside the app.",
             "Press Ctrl-C in that server's terminal, or run: "
             f"mtplx stop --port {port}",
+        ]
+    if listener is not None and listener.owned_by_app:
+        return [
+            (
+                f"Port {port} is held by pid {listener.pid}, an MTPLX daemon "
+                "the app launched that is no longer answering (it wedged)."
+            ),
+            (
+                "Press Stop in the MTPLX app (or quit the app), or run: "
+                f"kill {listener.pid}"
+            ),
+        ]
+    if listener is not None:
+        return [
+            f"Port {port} is in use by another app (not MTPLX): pid {listener.pid}.",
         ]
     return [
         f"Port {port} is in use by another app (not MTPLX).",
