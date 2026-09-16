@@ -209,6 +209,12 @@ def default_cold_tier_max_bytes() -> int:
     if ram <= 32 * GIB:
         return 24 * GIB
     if ram <= 64 * GIB:
+        try:
+            free = shutil.disk_usage(DEFAULT_COLD_TIER_DIR).free
+            if free >= 150 * GIB:
+                return DEFAULT_COLD_TIER_MAX_BYTES
+        except Exception:
+            pass
         return 32 * GIB
     return DEFAULT_COLD_TIER_MAX_BYTES
 
@@ -388,7 +394,7 @@ class SessionBankColdTier:
         # them (measured 58 GB in 45 min with restore_hits=0). Rolling
         # one-hour byte budget; beyond it new writes are skipped.
         self._write_budget_per_hour_bytes = _env_size_bytes(
-            "MTPLX_SSD_WRITE_BUDGET_PER_HOUR", 64 * 1024**3
+            "MTPLX_SSD_WRITE_BUDGET_PER_HOUR", 128 * 1024**3
         )
         self._written_window: deque[tuple[float, int]] = deque()
         # Foreground-yield contract (2026-08-07): the server wires this to
