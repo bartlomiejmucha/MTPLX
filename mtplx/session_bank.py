@@ -237,8 +237,13 @@ GIB = 1024**3
 # a stale short prefix (#121, measured 2026-07-16). Memory stays bounded by
 # max_bytes; the count cap only bounds scan cost.
 DEFAULT_MAX_ENTRIES = 24
-DEFAULT_MAX_BYTES = 48 * GIB
-DEFAULT_PER_SESSION_MAX_BYTES = 32 * GIB
+# Flat fallbacks for a machine whose RAM cannot be detected and that has no
+# memory plan. Every detected machine sizes the bank from the plan
+# (engine_session.resolve_session_bank_max_bytes) and the per-session cap
+# from the plan's play (resolve_session_bank_per_session_bytes), so raising
+# these would only raise the gate on the one machine we know nothing about.
+DEFAULT_MAX_BYTES = 24 * GIB
+DEFAULT_PER_SESSION_MAX_BYTES = 8 * GIB
 DEFAULT_IDLE_TTL_S = 60 * 60
 DEFAULT_PREFIX_BLOCK_SIZE = 256
 DEFAULT_BLOCK_PREFIX_MIN_MATCH_TOKENS = 512

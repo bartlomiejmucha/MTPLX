@@ -77,6 +77,20 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
+- **Deep-context sessions persist on the machines that can restore them**
+  (PR #496, Dizzler7). A 12 GiB warm snapshot (Qwen3.8-27B, Q8 KV, more
+  than 100k tokens) was refused by the flat 8 GiB per-session cap on Macs
+  under 96 GB, so those sessions never reached the SSD tier and came back
+  cold after a restart. The per-session cap is now sized by the memory
+  plan: two thirds of the bank budget, held under half of what the engine
+  budget leaves after the weights and the runtime transients (a restore
+  holds the snapshot next to its banked copy): 13.2 GiB on a 64 GB Mac with
+  the 27B, 32 GiB on a 128 GB Mac with the 27B, 10.5 GiB with Flash-Next.
+  The PR's flat 32 GiB would have been swap death on a 64 GB seat; the
+  flat fallbacks for a machine without a plan are unchanged. From the same
+  PR: 64 GB Macs with 150 GiB of free disk default the SSD cap to 100 GiB
+  instead of 32, and the hourly SSD write budget default is 128 GiB (was
+  64).
 - **Remote Qwen checkpoints without MTP weights inspect as autoregressive,
   and Forge refuses to build speculative artifacts from them** (PR #489,
   Philip John Basile). A Hugging Face checkpoint whose listing carried every

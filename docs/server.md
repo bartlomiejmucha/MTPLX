@@ -148,7 +148,7 @@ These environment variables are read by the daemon at start (`mtplx start`,
 | `MTPLX_SESSION_BANK_IDLE_TTL_S` | `3600` | Seconds a warm entry and its session may sit untouched before the idle sweep drops them. `0` disables the sweep: entries live until the byte budgets, real memory pressure or a restart take them (the SSD tier keeps its copy either way). |
 | `MTPLX_SESSION_BANK_ACTIVE_PIN_TTL_S` | `600` | Sessions that touched the cache within this many seconds are evicted last when the cache is over budget. `0` turns the preference off. |
 | `MTPLX_SESSION_BANK_MAX_BYTES` | `auto` | Total warm-cache budget. `auto` is half of the RAM left after the model weights, floored at 1 GiB and capped at 48 GiB. Sizes such as `24G` are accepted. |
-| `MTPLX_SESSION_BANK_PER_SESSION_BYTES` | `auto` | Budget for one conversation's warm state. Sizes such as `12G` are accepted. |
+| `MTPLX_SESSION_BANK_PER_SESSION_BYTES` | `auto` | Budget for one conversation's warm state: two thirds of the total budget, held under what the machine can restore (half of the engine budget left after the weights and 3 GiB of transients, since a restore holds the snapshot next to its banked copy). 64 GB Mac with the 27B: 13.2 GiB; 128 GB with the 27B: 32 GiB; 128 GB with Flash-Next: 10.5 GiB. Sizes such as `12G` are accepted. |
 | `MTPLX_SESSION_BANK_MAX_ENTRIES` | `24` (`48` on Macs with 96 GB or more) | Maximum number of warm entries across all conversations. |
 
 A long conversation that starts over after a pause is a cache *miss*, not an
@@ -167,8 +167,8 @@ stored once.
 | Setting | Default | Meaning |
 |---|---|---|
 | `--ssd-session-cache {on,write-only,off}` | `on` | Whether sessions are written to and restored from SSD. |
-| `--ssd-session-cache-max-size` | `100GB` (`32GB` on 64 GB Macs, `24GB` on 32 GB, `16GB` on 16 GB) | Cap on the **whole** store directory as it sits on disk, orphaned files included. The effective cap is `min(this, free_disk / 4)`, and writes stop below 10 GiB free. When a write would take the store over the cap, garbage is reclaimed first and only then are the least recently used entries evicted. |
-| `MTPLX_SSD_WRITE_BUDGET_PER_HOUR` | `64G` | Rolling one-hour byte budget for SSD writes (SSD wear); writes beyond it are skipped for the hour. |
+| `--ssd-session-cache-max-size` | `100GB` (`32GB` on 64 GB Macs unless the disk has 150 GiB free, `24GB` on 32 GB, `16GB` on 16 GB) | Cap on the **whole** store directory as it sits on disk, orphaned files included. The effective cap is `min(this, free_disk / 4)`, and writes stop below 10 GiB free. When a write would take the store over the cap, garbage is reclaimed first and only then are the least recently used entries evicted. |
+| `MTPLX_SSD_WRITE_BUDGET_PER_HOUR` | `128G` | Rolling one-hour byte budget for SSD writes (SSD wear); writes beyond it are skipped for the hour. |
 | `MTPLX_SSD_WRITER_BACKLOG_BYTES` | `4G` | Bytes of encoded snapshots the writer may hold in RAM while waiting to write; larger single entries stream to disk instead. |
 
 **Orphaned files.** A crash between a blob write and its manifest row, an

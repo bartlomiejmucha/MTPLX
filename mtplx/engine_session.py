@@ -38,7 +38,7 @@ from .runtime_options import block_prefix_restore_enabled
 logger = logging.getLogger(__name__)
 
 _HIGH_MEMORY_SESSION_BANK_THRESHOLD_BYTES = 96 * 1024**3
-_HIGH_MEMORY_PER_SESSION_MAX_BYTES = 32 * 1024**3
+_HIGH_MEMORY_PER_SESSION_MAX_BYTES = 24 * 1024**3
 _HIGH_MEMORY_MAX_ENTRIES = 48
 # Model-aware auto budget (v2, founder ruling 2026-07-05): the RAM cache
 # defaults to half of the RAM that remains after the model weights, so a
@@ -360,17 +360,49 @@ def resolve_session_bank_max_bytes(
     return DEFAULT_MAX_BYTES, False
 
 
+def per_session_play_ceiling_bytes(memory_plan: Any | None) -> int | None:
+    """The largest one-conversation snapshot the plan can restore.
+
+    A restore materializes the snapshot next to the banked copy, so one
+    session's warm state must fit twice in the play the engine budget
+    leaves after the weights and the runtime transients:
+    (usable - weights - RUNTIME_TRANSIENTS) / 2. PR #496 (Dizzler7) asked
+    for a flat 32 GiB so a 12 GiB deep-context snapshot (Qwen3.8-27B, Q8 KV,
+    >100k tokens) stops being refused on the 8 GiB tier; a flat number is
+    swap death on a 64 GB seat, this is the same ask sized by the machine:
+    64 GB + 27B: 13.2 GiB; 128 GB + 27B: 37 GiB (the budget rule then
+    holds it at 32); 128 GB + Flash-Next: 10.5 GiB; 48 GB + 27B: 7.2 GiB.
+    None without a plan (legacy tier ceilings apply).
+    """
+    if memory_plan is None or not getattr(memory_plan, "available", False):
+        return None
+    try:
+        from mtplx.memory_plan import RUNTIME_TRANSIENTS_BYTES
+
+        usable = int(getattr(memory_plan, "usable_bytes", 0) or 0)
+        weights = int(getattr(memory_plan, "model_weights_bytes", 0) or 0)
+    except Exception:
+        return None
+    if usable <= 0 or weights <= 0:
+        return None
+    play = usable - weights - int(RUNTIME_TRANSIENTS_BYTES)
+    return max(_AUTO_BUDGET_FLOOR_BYTES, play // 2)
+
+
 def resolve_session_bank_per_session_bytes(
     max_bytes: int,
     *,
     auto_active: bool = True,
+    memory_plan: Any | None = None,
 ) -> int:
     """Per-session cap resolution.
 
     Explicit env wins (clamped to the bank budget when the budget was
     auto-computed). In auto mode the default is 2/3 of the budget so one
-    conversation cannot monopolize the whole cache; in legacy mode the
-    RAM-tiered defaults are preserved exactly.
+    conversation cannot monopolize the whole cache, held under what the
+    machine can restore: the plan's play ceiling when a memory plan is
+    available (``per_session_play_ceiling_bytes``), else the RAM-tier
+    ceiling; in legacy mode the RAM-tiered defaults are preserved exactly.
     """
     raw = os.environ.get("MTPLX_SESSION_BANK_PER_SESSION_BYTES")
     if raw is not None and raw.strip() and not _is_auto_bytes_setting(raw):
@@ -380,15 +412,19 @@ def resolve_session_bank_per_session_bytes(
         )
         return min(parsed, int(max_bytes)) if auto_active else parsed
     if auto_active:
-        # 2/3 of the bank budget, additionally clamped to the RAM-tier
-        # ceiling (8 GiB below 96 GiB RAM, 24 GiB above). The auto rule on
-        # its own RAISED the admission gate on small boxes relative to the
-        # v1.0.4 flat gate (64 GB Mac: 15 GiB vs 8 GiB), admitting snapshots
-        # whose restore-time transient copies blow past physical RAM (#150,
-        # ArthoPacini). Oversized snapshots still get the live-ref lease
-        # fallback, so warm reuse survives the clamp.
+        # 2/3 of the bank budget. The auto rule on its own RAISED the
+        # admission gate on small boxes relative to the v1.0.4 flat gate
+        # (64 GB Mac: 15 GiB vs 8 GiB), admitting snapshots whose
+        # restore-time transient copies blow past physical RAM (#150,
+        # ArthoPacini); the ceiling below is that restore copy priced by
+        # the plan, or the RAM tier (8 GiB below 96 GiB RAM, 24 GiB above)
+        # when there is no plan. Oversized snapshots still get the live-ref
+        # lease fallback, so warm reuse survives the clamp.
         auto_cap = max(_AUTO_BUDGET_FLOOR_BYTES, int(max_bytes) * 2 // 3)
-        return min(auto_cap, _default_per_session_max_bytes())
+        ceiling = per_session_play_ceiling_bytes(memory_plan)
+        if ceiling is None:
+            ceiling = _default_per_session_max_bytes()
+        return min(auto_cap, ceiling)
     return _default_per_session_max_bytes()
 
 
@@ -1653,6 +1689,7 @@ class EngineSessionManager:
                 per_session_max_bytes=resolve_session_bank_per_session_bytes(
                     resolved_max_bytes,
                     auto_active=auto_active,
+                    memory_plan=memory_plan,
                 ),
                 idle_ttl_s=idle_ttl_s,
                 cold_tier=cold_tier,
