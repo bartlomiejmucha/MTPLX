@@ -946,7 +946,15 @@ def _server_runtime_env_overrides(
                 # keeps a re-rendered agent turn on its boundary snapshots
                 # instead of a cold re-prefill.
                 "MTPLX_QWEN4_OPDIET",
-                "MTPLX_QWEN4_BLOCK_VERIFY",
+                # MTPLX_QWEN4_BLOCK_VERIFY is deliberately NOT stamped. The
+                # exact block law (qwen4_block_verify.py) and the standard
+                # verify are both distribution-exact; on the 2026-09-16
+                # overnight A/B (founder's 45k-token xhigh reasoning turn,
+                # Flash-Next Optimized Speed, alternating boots, max fans)
+                # the block lane accepted 2.90 draft tokens per round against
+                # 3.00 for the standard verify and 3.01 for 2.11.2, a 3.5%
+                # loss the 8.8k-token code receipt of 2026-09-08 (a tie) did
+                # not show. It stays an opt-in export.
                 "MTPLX_QWEN4_PLE_PREFILL_LOOKAHEAD",
                 "MTPLX_QWEN4_PLE_FIRST_GATHER_EARLY",
                 "MTPLX_SESSION_BANK_SHED_BOUNDARIES",

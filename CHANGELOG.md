@@ -294,7 +294,12 @@ All notable user-facing changes to MTPLX. The format is based on
   once at import, before the server stamped the Flash-Next lane defaults,
   so `/health` reported them configured while the daemon ran with all four
   off (davidtai's PR #475 found the same frozen readers). The gates are
-  re-read when the model's runtime env is applied, before the load.
+  re-read when the model's runtime env is applied, before the load. Three of
+  them are on by default; the exact block-verify lane
+  (`MTPLX_QWEN4_BLOCK_VERIFY`) is an opt-in export, because on a
+  45,000-token reasoning turn at effort xhigh it accepted 3.5 percent fewer
+  draft tokens per round than the standard verify across alternating
+  boots (both laws are distribution-exact; the faster one is the default).
 - **Reasoning substitution checks the whole tool call.** The
   committed-reasoning canonicalizer compared tool calls by their loop key
   (command or path only), so a `write` to the same file with new content
