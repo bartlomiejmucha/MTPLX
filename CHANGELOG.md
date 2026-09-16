@@ -153,6 +153,13 @@ All notable user-facing changes to MTPLX. The format is based on
   `can_run` as MTP evidence and admitted AR-only trunks into a speculative
   conversion that cannot create the missing trained head; it now requires
   MTP weight evidence and says so.
+- **SSD cache eviction yields to active requests.** A populated cache could
+  keep scanning and deleting old snapshots during the next reply, competing
+  with generation. Eviction now releases the store lock before waiting,
+  reclaims retired snapshots in bounded batches, and reads surviving blob
+  references once per pass instead of once per evicted entry. Concurrent
+  writes and shared blobs remain protected. The shared server fix applies
+  to the native app, OpenCode, Hermes, and Pi.
 - **The SSD session cache reconciles itself and its cap means the whole
   directory** (issue #493; three reports: 394,155 orphaned blobs, 44.1 GB,
   against 17 entries after three weeks; 471,541 blobs, 67 GB, on a 60 GB cap
