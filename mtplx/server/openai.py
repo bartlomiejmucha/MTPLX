@@ -13155,6 +13155,10 @@ _COMMITTED_TURN_OPEN = "<|im_start|>assistant\n"
 _COMMITTED_TURN_CLOSE = "<|im_end|>"
 _COMMITTED_THINK_OPEN = "<think>\n"
 _COMMITTED_THINK_CLOSE = "</think>"
+_COMMITTED_GEMMA4_TURN_OPEN = "<|turn>model\n"
+_COMMITTED_GEMMA4_TURN_CLOSE = "<turn|>"
+_COMMITTED_GEMMA4_THINK_OPEN = "<|channel>thought\n"
+_COMMITTED_GEMMA4_THINK_CLOSE = "<channel|>"
 
 
 def _committed_reasoning_canonicalization_enabled() -> bool:
@@ -13319,6 +13323,8 @@ class _CommittedTurn(tuple):
 
 def _committed_assistant_turns(
     committed_text: str,
+    *,
+    gemma4: bool | None = None,
 ) -> list[tuple[str | None, str, str]]:
     """Per assistant turn of a decoded committed stream, in order:
     (think_interior, visible_content_gate, tool_call_markup).
@@ -13333,16 +13339,29 @@ def _committed_assistant_turns(
     calls (identical visible text, different call → the committed reasoning
     argues for the OLD call and must not be substituted). Parsing is
     marker-based on the same template specials the boundary helpers above
-    rely on.
+    rely on. Gemma 4 uses model turns and native channel markers instead of
+    ChatML assistant turns and ``<think>`` tags; both shapes reduce to this
+    same positional representation.
     """
+    if gemma4 is None:
+        # Callers that know the runtime pass its parser (a Qwen stream that
+        # merely quotes a Gemma turn marker must not flip the parser); the
+        # marker sniff is the fallback for bare text.
+        gemma4 = _COMMITTED_GEMMA4_TURN_OPEN in committed_text
+    turn_open = _COMMITTED_GEMMA4_TURN_OPEN if gemma4 else _COMMITTED_TURN_OPEN
+    turn_close = _COMMITTED_GEMMA4_TURN_CLOSE if gemma4 else _COMMITTED_TURN_CLOSE
+    think_open = _COMMITTED_GEMMA4_THINK_OPEN if gemma4 else _COMMITTED_THINK_OPEN
+    think_close = (
+        _COMMITTED_GEMMA4_THINK_CLOSE if gemma4 else _COMMITTED_THINK_CLOSE
+    )
     turns: list[tuple[str | None, str, str]] = []
     search_from = 0
     while True:
-        turn_at = committed_text.find(_COMMITTED_TURN_OPEN, search_from)
+        turn_at = committed_text.find(turn_open, search_from)
         if turn_at < 0:
             break
-        body_start = turn_at + len(_COMMITTED_TURN_OPEN)
-        turn_end = committed_text.find(_COMMITTED_TURN_CLOSE, body_start)
+        body_start = turn_at + len(turn_open)
+        turn_end = committed_text.find(turn_close, body_start)
         body = (
             committed_text[body_start:turn_end]
             if turn_end >= 0
@@ -13350,15 +13369,20 @@ def _committed_assistant_turns(
         )
         think_interior: str | None = None
         content_part = body
-        if body.startswith(_COMMITTED_THINK_OPEN):
-            close_at = body.find(_COMMITTED_THINK_CLOSE, len(_COMMITTED_THINK_OPEN))
+        if body.startswith(think_open):
+            close_at = body.find(think_close, len(think_open))
             if close_at >= 0:
-                interior = body[len(_COMMITTED_THINK_OPEN) : close_at]
+                interior = body[len(think_open) : close_at]
                 # The template re-renders '<think>\n' + rc|trim + '\n</think>':
                 # a generated interior of the shape '{rc}\n' round-trips
                 # byte-exactly with rc stripped of the single trailing newline.
-                think_interior = interior[:-1] if interior.endswith("\n") else interior
-                content_part = body[close_at + len(_COMMITTED_THINK_CLOSE) :]
+                if gemma4:
+                    think_interior = interior
+                else:
+                    think_interior = (
+                        interior[:-1] if interior.endswith("\n") else interior
+                    )
+                content_part = body[close_at + len(think_close) :]
         markup_at = content_part.find("<tool_call")
         if markup_at >= 0:
             gate = content_part[:markup_at].strip()
@@ -13786,7 +13810,10 @@ def _maybe_canonicalize_committed_reasoning(
         committed_text = state.runtime.tokenizer.decode(list(committed))
     except Exception:
         return None
-    committed_turns = _committed_assistant_turns(committed_text)
+    committed_turns = _committed_assistant_turns(
+        committed_text,
+        gemma4=_reasoning_parser_for_state(state) == "gemma4",
+    )
     if not any(interior for interior, _gate, _markup in committed_turns):
         spliced = _splice_prompt_onto_committed(
             state, messages, prompt_ids, committed, cp_raw, outcome
@@ -14278,10 +14305,17 @@ def _encode_messages_uncached(
     # turn from scratch). Committed-think substitution still overwrites covered
     # turns inside _message_to_template_dict, so KV-exact bytes win wherever
     # they exist. Thinking-off and strip keep their pinned legacy renders.
-    include_reasoning = scoped_reasoning_history or (
-        preserve_reasoning_history
-        and enable_thinking
-        and not strip_assistant_reasoning_history
+    gemma4_encoding = is_gemma4_tokenizer(tokenizer)
+    include_reasoning = (
+        scoped_reasoning_history
+        or (
+            preserve_reasoning_history
+            and enable_thinking
+            and not strip_assistant_reasoning_history
+        )
+        # Gemma 4's direct encoder needs the echoed reasoning to reproduce the
+        # committed token stream even when the general preserve mode is off.
+        or (gemma4_encoding and not strip_assistant_reasoning_history)
     )
     prepared_messages: list[dict[str, Any]] = []
     for message in messages:
@@ -14324,7 +14358,7 @@ def _encode_messages_uncached(
             template_observability["native_agent_tail_contract_active"] = bool(
                 native_tail_added
             )
-    if is_gemma4_tokenizer(tokenizer):
+    if gemma4_encoding:
         if template_observability is not None:
             template_observability["backend_chat_encoding"] = "gemma4"
         native_tools = (
@@ -20575,7 +20609,20 @@ def _bank_history_policy(state: "ServerState") -> str:
     whole prompt on every top-level turn (#465: 14.5k tokens, ~2 minutes per
     turn on an M1 Max; the idle stall in #455 on an M3 Ultra). One answer per
     runtime, derived here, used everywhere.
+
+    A backend that banks a different history shape declares it on its
+    descriptor and its restore side asks for that same string: Gemma 4's
+    ``assistant_shared_kv`` (the assistant reads the shared KV carried in
+    ``extra_state``; there is no committed MTP-history cache). Until PR #283
+    every server put site banked Gemma 4 under the Qwen strings while the
+    backend restored under its own, so no Gemma 4 turn ever restored warm.
     """
+    declared = str(
+        getattr(getattr(state, "backend_descriptor", None), "mtp_history_policy", "")
+        or ""
+    )
+    if declared and declared != "committed":
+        return declared
     runtime = getattr(state, "runtime", None)
     return "committed" if bool(getattr(runtime, "mtp_enabled", True)) else "cycle"
 
@@ -21558,7 +21605,10 @@ def _history_ids_for_postcommit(
         except Exception:
             committed_text = ""
         if committed_text:
-            committed_turns = _committed_assistant_turns(committed_text)
+            committed_gemma4 = _reasoning_parser_for_state(state) == "gemma4"
+            committed_turns = _committed_assistant_turns(
+                committed_text, gemma4=committed_gemma4
+            )
             # F11 #3 follow-up (founder-session receipt 2026-08-21): the
             # request-local stream renders an EMPTY think interior for any
             # history turn the committed-reasoning gate could not
@@ -21575,7 +21625,9 @@ def _history_ids_for_postcommit(
                 except Exception:
                     session_text = ""
                 if session_text:
-                    session_turns = _committed_assistant_turns(session_text)
+                    session_turns = _committed_assistant_turns(
+                        session_text, gemma4=committed_gemma4
+                    )
                     committed_turns = [
                         (
                             session_turns[index]
@@ -21681,12 +21733,6 @@ def _generation_final_postcommit_compatibility(
             "safe": False,
             "mode": "unsafe",
             "reason": "stats_footer_in_assistant_history",
-        }
-    if _reasoning_parser_for_state(state) == "gemma4" and thinking_enabled:
-        return {
-            "safe": False,
-            "mode": "unsafe",
-            "reason": "gemma4_reasoning_history_retokenize",
         }
     final_state = generated.get("_final_state")
     if final_state is None:
@@ -21900,6 +21946,99 @@ def _dump_postcommit_mismatch(
         pass
 
 
+def _bank_backend_id(state: ServerState) -> str:
+    """The backend whose restore side the bank identity strings must match."""
+    return str(
+        getattr(getattr(state, "backend_descriptor", None), "backend_id", "")
+        or getattr(getattr(state, "runtime", None), "backend_id", "")
+    )
+
+
+def _generation_final_bank_metadata(
+    state: ServerState,
+    final_state: Any,
+    *,
+    token_count: int,
+) -> dict[str, Any]:
+    """Bank identity and MTP-history payload for a generation-final put.
+
+    One identity per runtime, the one its restore side asks for: Gemma 4
+    restores its pre-norm hidden state under ``gemma4_pre_norm`` and carries
+    no committed MTP history (its assistant reads the shared KV in
+    ``extra_state``); every other runtime banks ``post_norm``. The history
+    policy is never a literal here: ``_bank_history_policy`` is the one
+    answer per runtime (#465 -- an AR-only runtime banks under ``cycle`` and
+    is looked up under ``cycle``).
+    """
+    backend_id = _bank_backend_id(state)
+    committed_mtp_cache = getattr(final_state, "final_committed_mtp_cache", None)
+    mtp_snapshot = (
+        snapshot_cache(committed_mtp_cache) if committed_mtp_cache is not None else None
+    )
+    return {
+        "hidden_variant": (
+            "gemma4_pre_norm" if backend_id == GEMMA4_BACKEND else "post_norm"
+        ),
+        "mtp_history_policy": _bank_history_policy(state),
+        "mtp_history_snapshot": mtp_snapshot,
+        "mtp_snapshot_epoch": token_count if mtp_snapshot is not None else None,
+    }
+
+
+def _generation_final_prompt_boundary_available(
+    state: ServerState,
+    final_state: Any,
+) -> bool:
+    backend_id = _bank_backend_id(state)
+    return bool(
+        backend_id == GEMMA4_BACKEND
+        and getattr(final_state, "prompt_boundary_cache", None) is not None
+        and getattr(final_state, "prompt_boundary_logits", None) is not None
+        and getattr(final_state, "prompt_boundary_hidden", None) is not None
+        and isinstance(
+            getattr(final_state, "prompt_boundary_extra_state", None),
+            dict,
+        )
+    )
+
+
+def _generation_final_bank_commit_safe(state: ServerState, final_state: Any) -> bool:
+    return bool(
+        getattr(final_state, "safe_to_commit", False)
+        or _generation_final_prompt_boundary_available(state, final_state)
+    )
+
+
+def _generation_final_bank_values(
+    state: ServerState,
+    final_state: Any,
+    *,
+    prompt_ids: Sequence[int],
+    final_token_ids: Sequence[int],
+) -> dict[str, Any]:
+    backend_id = _bank_backend_id(state)
+    prompt_cache = getattr(final_state, "prompt_boundary_cache", None)
+    if backend_id == GEMMA4_BACKEND and prompt_cache is not None:
+        return {
+            "token_ids": [int(token) for token in prompt_ids],
+            "cache": prompt_cache,
+            "logits": getattr(final_state, "prompt_boundary_logits", None),
+            "hidden": getattr(final_state, "prompt_boundary_hidden", None),
+            "extra_state": getattr(
+                final_state,
+                "prompt_boundary_extra_state",
+                None,
+            ),
+        }
+    return {
+        "token_ids": [int(token) for token in final_token_ids],
+        "cache": final_state.final_trunk_cache,
+        "logits": final_state.final_logits,
+        "hidden": final_state.final_hidden,
+        "extra_state": getattr(final_state, "extra_state", None),
+    }
+
+
 def _store_generation_final_history_snapshot(
     state: ServerState,
     *,
@@ -21945,7 +22084,12 @@ def _store_generation_final_history_snapshot(
         strip_tool_call_preamble_text=strip_tool_call_preamble_text,
         session=session,
     )
-    if not bool(compatibility.get("safe")):
+    final_state = generated.get("_final_state")
+    prompt_boundary_safe = bool(
+        final_state is not None
+        and _generation_final_prompt_boundary_available(state, final_state)
+    )
+    if not bool(compatibility.get("safe")) and not prompt_boundary_safe:
         outcome = {
             "stored": False,
             "mode": compatibility.get("mode", "unsafe"),
@@ -21964,8 +22108,13 @@ def _store_generation_final_history_snapshot(
         # was refused every time.
         _flight(state).pc(session_id, {"action": "generation_final", **outcome})
         return outcome
-    final_state = generated["_final_state"]
-    token_ids = [int(token) for token in compatibility["token_ids"]]
+    bank_values = _generation_final_bank_values(
+        state,
+        final_state,
+        prompt_ids=prompt_ids,
+        final_token_ids=compatibility.get("token_ids") or prompt_ids,
+    )
+    token_ids = bank_values.pop("token_ids")
     acquired = state.lock.acquire(blocking=False)
     if not acquired:
         return {
@@ -21975,28 +22124,22 @@ def _store_generation_final_history_snapshot(
             "elapsed_s": time.perf_counter() - started,
         }
     try:
-        mtp_snapshot = (
-            snapshot_cache(final_state.final_committed_mtp_cache)
-            if final_state.final_committed_mtp_cache is not None
-            else None
+        bank_metadata = _generation_final_bank_metadata(
+            state,
+            final_state,
+            token_count=len(token_ids),
         )
         entry = state.sessions.bank.put(
             runtime=state.runtime,
             token_ids=token_ids,
-            cache=final_state.final_trunk_cache,
-            logits=final_state.final_logits,
-            hidden=final_state.final_hidden,
-            hidden_variant="post_norm",
             keep_live_ref=bool(keep_live_ref),
             session_id=session_id,
             template_hash=state.template_hash,
-            mtp_history_policy=_bank_history_policy(state),
             draft_head_identity=state.draft_head_identity,
             policy_fingerprint=policy_fingerprint,
-            mtp_history_snapshot=mtp_snapshot,
             snapshot_epoch=len(token_ids),
-            mtp_snapshot_epoch=len(token_ids) if mtp_snapshot is not None else None,
-            extra_state=getattr(final_state, "extra_state", None),
+            **bank_values,
+            **bank_metadata,
         )
     finally:
         state.lock.release()
@@ -22011,12 +22154,28 @@ def _store_generation_final_history_snapshot(
         return outcome
     outcome = {
         "stored": True,
-        "mode": compatibility["mode"],
-        "reason": compatibility["reason"],
+        "mode": (
+            "generation_prompt_boundary"
+            if prompt_boundary_safe
+            else compatibility["mode"]
+        ),
+        "reason": (
+            (
+                "prompt_boundary_retained"
+                if compatibility.get("safe")
+                else "prompt_boundary_before_unsafe_history"
+            )
+            if prompt_boundary_safe
+            else compatibility["reason"]
+        ),
         "prefix_len": entry.prefix_len,
         "nbytes": entry.nbytes,
         "elapsed_s": time.perf_counter() - started,
-        "history_suffix_tokens": int(compatibility.get("history_suffix_tokens") or 0),
+        "history_suffix_tokens": (
+            0
+            if prompt_boundary_safe
+            else int(compatibility.get("history_suffix_tokens") or 0)
+        ),
         "token_hash": entry.token_hash,
     }
     if "token_splice" in compatibility:
@@ -24956,34 +25115,33 @@ def _run_generation(
             and session_bank is not None
             and session_id is not None
             and final_state is not None
-            and final_state.safe_to_commit
+            and _generation_final_bank_commit_safe(state, final_state)
             and final_commit_prompt_ids is not None
         ):
             final_token_ids = list(final_commit_prompt_ids) + list(out.tokens)
-            mtp_snapshot = (
-                snapshot_cache(final_state.final_committed_mtp_cache)
-                if final_state.final_committed_mtp_cache is not None
-                else None
+            bank_values = _generation_final_bank_values(
+                state,
+                final_state,
+                prompt_ids=final_commit_prompt_ids,
+                final_token_ids=final_token_ids,
+            )
+            bank_token_ids = bank_values.pop("token_ids")
+            bank_metadata = _generation_final_bank_metadata(
+                state,
+                final_state,
+                token_count=len(bank_token_ids),
             )
             session_bank.put(
                 runtime=state.runtime,
-                token_ids=final_token_ids,
-                cache=final_state.final_trunk_cache,
-                logits=final_state.final_logits,
-                hidden=final_state.final_hidden,
-                hidden_variant="post_norm",
+                token_ids=bank_token_ids,
                 keep_live_ref=bool(session_keep_live_ref),
                 session_id=session_id,
                 template_hash=session_template_hash,
-                mtp_history_policy=_bank_history_policy(state),
                 draft_head_identity=session_draft_head_identity,
                 policy_fingerprint=session_policy_fingerprint,
-                mtp_history_snapshot=mtp_snapshot,
-                snapshot_epoch=len(final_token_ids),
-                mtp_snapshot_epoch=len(final_token_ids)
-                if mtp_snapshot is not None
-                else None,
-                extra_state=getattr(final_state, "extra_state", None),
+                snapshot_epoch=len(bank_token_ids),
+                **bank_values,
+                **bank_metadata,
             )
             stats["sessionbank_snapshot_bytes"] = int(
                 getattr(session_bank, "last_put_nbytes", 0) or 0
@@ -31682,6 +31840,24 @@ def create_app(state: ServerState) -> FastAPI:
                 strip_tool_call_preamble_text=strip_tool_call_preamble_text,
                 session=session,
             )
+            final_state = generated.get("_final_state")
+            if final_state is not None and _generation_final_prompt_boundary_available(
+                state,
+                final_state,
+            ):
+                generated["stats"]["session_postcommit_snapshot"] = {
+                    "stored": True,
+                    "mode": "generation_prompt_boundary",
+                    "reason": (
+                        "prompt_boundary_retained"
+                        if compatibility.get("safe")
+                        else "prompt_boundary_before_unsafe_history"
+                    ),
+                    "prefix_len": len(prompt_ids),
+                    "elapsed_s": time.perf_counter() - started,
+                    "history_suffix_tokens": 0,
+                }
+                return
             if compatibility.get("safe"):
                 generated["stats"]["session_postcommit_snapshot"] = {
                     "stored": True,

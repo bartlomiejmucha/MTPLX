@@ -74,3 +74,48 @@ def test_server_has_no_hardcoded_history_policy_literal():
     literal_fingerprint = re.findall(r'"mtp_history_policy=committed"', source)
     assert literal_stores == [], "store/lookup sites must derive from _bank_history_policy"
     assert literal_fingerprint == [], "the fingerprint must derive from _bank_history_policy"
+
+
+def test_gemma4_runtime_banks_under_its_descriptor_policy():
+    # PR #283: the Gemma 4 backend restores under its descriptor's
+    # assistant_shared_kv; the one policy per runtime must be that string so
+    # every server put site and the fingerprint agree with the restore side.
+    from mtplx.backends.descriptors import descriptor_for_backend_id
+
+    state = _state(mtp_enabled=True)
+    state.backend_descriptor = descriptor_for_backend_id("gemma4_assistant")
+    assert _bank_history_policy(state) == "assistant_shared_kv"
+    assert "mtp_history_policy=assistant_shared_kv" in _policy_fingerprint(
+        state, thinking_enabled=True
+    )
+    # A Qwen descriptor declares the committed shape and keeps the AR-only rule.
+    qwen = _state(mtp_enabled=False)
+    qwen.backend_descriptor = SimpleNamespace(mtp_history_policy="committed")
+    assert _bank_history_policy(qwen) == "cycle"
+
+
+def test_generation_final_bank_metadata_derives_the_runtime_policy():
+    # The generation-final put must not regress #465 by carrying a literal:
+    # an AR-only runtime still banks under cycle, Gemma 4 under its own.
+    from mtplx.backends.descriptors import descriptor_for_backend_id
+    from mtplx.server.openai import _generation_final_bank_metadata
+
+    final_state = SimpleNamespace(final_committed_mtp_cache=None)
+    ar_only = _generation_final_bank_metadata(
+        _state(mtp_enabled=False), final_state, token_count=3
+    )
+    assert ar_only["mtp_history_policy"] == "cycle"
+    assert ar_only["hidden_variant"] == "post_norm"
+    assert ar_only["mtp_history_snapshot"] is None
+    mtp = _generation_final_bank_metadata(
+        _state(mtp_enabled=True), final_state, token_count=3
+    )
+    assert mtp["mtp_history_policy"] == "committed"
+    assert mtp["hidden_variant"] == "post_norm"
+    gemma = _state(mtp_enabled=True)
+    gemma.backend_descriptor = descriptor_for_backend_id("gemma4_assistant")
+    banked = _generation_final_bank_metadata(gemma, final_state, token_count=3)
+    assert banked["hidden_variant"] == "gemma4_pre_norm"
+    assert banked["mtp_history_policy"] == "assistant_shared_kv"
+    assert banked["mtp_history_snapshot"] is None
+    assert banked["mtp_snapshot_epoch"] is None
