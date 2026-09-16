@@ -613,3 +613,32 @@ def test_longest_shared_prefix_tokens_sees_entries_that_are_not_exact_prefixes()
     assert bank.longest_shared_prefix_tokens(follow_up, session_id="other") == 0
     assert bank.longest_shared_prefix_tokens([7, 8, 9, 99]) == 3
     assert bank.longest_shared_prefix_tokens([]) == 0
+
+
+def test_session_bank_names_the_oversized_skip_on_the_next_miss():
+    # Issue #499 (2026-09-16 repro on a 48 GB plan): a 142k-token turn's
+    # snapshot was refused for size and the next turn reported the cold
+    # tier's ``ssd_prefix_miss``, which hid the cause. The refusal is the
+    # miss reason for that conversation; another conversation is not blamed.
+    bank = SessionBank(max_entries=4, max_bytes=1024, per_session_max_bytes=512)
+    runtime = RuntimeWithCaches()
+
+    assert (
+        bank.put(
+            runtime=runtime,
+            token_ids=[1, 2, 3],
+            cache=[],
+            logits=None,
+            hidden=None,
+            session_id="session-1",
+            nbytes_override=2048,
+        )
+        is None
+    )
+    assert bank.to_dict()["last_oversized_skip"]["prefix_len"] == 3
+
+    assert bank.restore(runtime, [1, 2, 3, 4], mode="clone", session_id="session-1") is None
+    assert bank.last_miss_reason == "oversized_snapshot_skipped"
+
+    assert bank.restore(runtime, [7, 8, 9, 10], mode="clone", session_id="session-1") is None
+    assert bank.last_miss_reason != "oversized_snapshot_skipped"
