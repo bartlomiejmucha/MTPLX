@@ -762,10 +762,31 @@ class SessionBankColdTier:
                 self._inc("skipped_size_cap")
                 self._warn_spill_size_capped(entry, estimated, effective_cap)
                 return False
-            if not self._evict_until_room(estimated, cap_bytes=effective_cap):
-                self._inc("skipped_size_cap")
-                self._warn_spill_size_capped(entry, estimated, effective_cap)
-                return False
+        # The owner thread yields back to the scheduler rather than waiting
+        # behind foreground work. In particular, never pause with _base_lock
+        # held: a foreground restore may need that same lock.
+        def yield_eviction() -> None:
+            if self._stop.is_set() or (
+                self._encode_yield_enabled
+                and self.foreground_busy is not None
+                and self.foreground_busy()
+            ):
+                raise ColdEncodeInterrupted()
+
+        try:
+            room = self._evict_until_room(
+                estimated, cap_bytes=effective_cap, on_yield=yield_eviction
+            )
+        except ColdEncodeInterrupted:
+            self._inc("encode_yields_foreground")
+            if raise_on_yield:
+                raise
+            return False
+        if not room:
+            self._inc("skipped_size_cap")
+            self._warn_spill_size_capped(entry, estimated, effective_cap)
+            return False
+        with self._base_lock:
             self._claim_inflight(entry_dirs=(entry_dir_rel,))
         claimed_digests: set[str] = set()
         try:
@@ -1668,9 +1689,9 @@ class SessionBankColdTier:
                     self.max_bytes,
                 )
                 return False
-            if not self._evict_until_room(pending_bytes, cap_bytes=effective_cap):
-                self._inc("skipped_size_cap")
-                return False
+        if not self._evict_until_room(pending_bytes, cap_bytes=effective_cap):
+            self._inc("skipped_size_cap")
+            return False
         # Phase 2 (no lock): pause-aware bulk blob writes. Blobs are
         # content-addressed, atomic (tmp+rename), idempotent, and invisible
         # to restores until the manifest row lands in phase 3 — a crash or a
@@ -1750,10 +1771,25 @@ class SessionBankColdTier:
             return False
         return True
 
-    def _evict_until_room(self, required_bytes: int, *, cap_bytes: int | None = None) -> bool:
+    def _evict_until_room(
+        self,
+        required_bytes: int,
+        *,
+        cap_bytes: int | None = None,
+        on_yield: Callable[[], None] | None = None,
+    ) -> bool:
+        """Retire LRU entries, then reclaim their blobs in one paced pass.
+
+        Called WITHOUT _base_lock. The writer can wait out a foreground
+        turn; owner-thread spills instead raise ColdEncodeInterrupted.
+        Re-reading every surviving payload for every victim made a 66-entry
+        eviction run for 89 seconds alongside the next two app replies.
+        """
         required = max(0, int(required_bytes))
         cap = int(self.max_bytes if cap_bytes is None else cap_bytes)
-        current = self._current_bytes_for_cap(required)
+        yield_work = on_yield or self._pause_for_foreground
+        with self._base_lock:
+            current = self._current_bytes_for_cap(required)
         if current + required <= cap:
             return True
         with self._connect() as conn:
@@ -1763,13 +1799,39 @@ class SessionBankColdTier:
                     "FROM entries ORDER BY last_access_s ASC"
                 ).fetchall()
             )
-        for row in rows:
-            self._delete_entry_row(row)
-            current -= int(row["physical_nbytes"] or row["nbytes"] or 0)
-            self._inc("entries_evicted")
-            if current + required <= cap:
-                return True
-        return current + required <= cap
+        garbage: set[str] = set()
+        try:
+            for row in rows:
+                yield_work()
+                if self._stop.is_set():
+                    return False
+                with self._base_lock:
+                    # A concurrent spill may be reusing this entry. Its
+                    # manifest and blobs remain protected until it commits.
+                    if str(row["entry_dir"]) in self._inflight_entry_dirs:
+                        continue
+                    if not self._entry_in_manifest(str(row["entry_id"])):
+                        continue
+                    garbage.update(self._retire_entry_row(row))
+                    current -= int(row["physical_nbytes"] or row["nbytes"] or 0)
+                    self._inc("entries_evicted")
+                if current + required <= cap:
+                    break
+            self._delete_unreferenced_blobs(garbage, on_yield=yield_work)
+            garbage.clear()
+            with self._base_lock:
+                # A spill can commit while the writer yields. Admission must
+                # include that new entry, not the pre-pause byte count.
+                return (
+                    not self._stop.is_set()
+                    and self._current_bytes_for_cap(required) + required <= cap
+                )
+        finally:
+            if garbage:
+                # An interrupted owner-thread spill is retried by its
+                # scheduler. Retired blobs are also recoverable by the
+                # existing foreground-aware orphan worker after a stop.
+                self._start_orphan_cleanup()
 
     def _effective_write_budget(self) -> tuple[int, str | None]:
         """min(configured cap, free_disk/4), writes disabled under 10 GiB free.
@@ -1857,6 +1919,12 @@ class SessionBankColdTier:
             )
 
     def _delete_entry_row(self, row: sqlite3.Row) -> None:
+        with self._base_lock:
+            blob_hashes = self._retire_entry_row(row)
+        self._delete_unreferenced_blobs(blob_hashes)
+
+    def _retire_entry_row(self, row: sqlite3.Row) -> set[str]:
+        """Remove the small entry record under _base_lock, retaining blobs."""
         entry_id = str(row["entry_id"])
         entry_dir = self.base_dir / str(row["entry_dir"])
         blob_hashes = self._entry_blob_hashes(entry_dir)
@@ -1864,8 +1932,8 @@ class SessionBankColdTier:
             shutil.rmtree(entry_dir)
         with self._connect() as conn:
             conn.execute("DELETE FROM entries WHERE entry_id = ?", (entry_id,))
-        self._delete_unreferenced_blobs(blob_hashes)
         self._invalidate_disk_usage_cache()
+        return blob_hashes
 
     def _archive_entry_row(self, row: sqlite3.Row) -> None:
         entry_id = str(row["entry_id"])
@@ -1902,27 +1970,49 @@ class SessionBankColdTier:
     def _manifest_blob_hashes(self) -> set[str]:
         return _manifest_blob_hashes_of(self.base_dir)
 
-    def _delete_unreferenced_blobs(self, candidate_hashes: set[str]) -> None:
+    def _delete_unreferenced_blobs(
+        self,
+        candidate_hashes: set[str],
+        *,
+        on_yield: Callable[[], None] | None = None,
+    ) -> None:
         if not candidate_hashes:
             return
-        still_referenced = self._manifest_blob_hashes()
-        for digest in sorted(candidate_hashes - still_referenced):
-            path = self._blob_path(digest)
-            if not path.exists():
-                continue
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                continue
-            except OSError as exc:
-                logger.warning(
-                    "SessionBank SSD blob cleanup failed digest=%s: %s: %s",
-                    digest[:12],
-                    type(exc).__name__,
-                    exc,
+        yield_work = on_yield or self._pause_for_foreground
+        candidates = sorted(candidate_hashes)
+        generation = -1
+        still_referenced: set[str] = set()
+        index = 0
+        while index < len(candidates):
+            yield_work()
+            if self._stop.is_set():
+                return
+            observed = self._generation_now()
+            if generation != observed:
+                # Scan without the store lock, yielding between payloads.
+                # Validate its generation under the lock before deleting.
+                still_referenced = _manifest_blob_hashes_of(
+                    self.base_dir, on_yield=yield_work
                 )
-                continue
-            self._prune_empty_parents(path.parent, stop_at=self.base_dir / "blobs")
+                generation = observed
+            with self._base_lock:
+                if generation != self._generation_now():
+                    continue
+                for digest in candidates[index : index + 64]:
+                    if digest in still_referenced or digest in self._inflight_blob_hashes:
+                        continue
+                    path = self._blob_path(digest)
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError as exc:
+                        logger.warning(
+                            "SessionBank SSD blob cleanup failed digest=%s: %s: %s",
+                            digest[:12], type(exc).__name__, exc,
+                        )
+                        continue
+                    self._prune_empty_parents(path.parent, stop_at=self.base_dir / "blobs")
+                index += 64
+        self._invalidate_disk_usage_cache()
 
     def _orphan_cleanup_is_running(self) -> bool:
         with self._disk_usage_lock:
