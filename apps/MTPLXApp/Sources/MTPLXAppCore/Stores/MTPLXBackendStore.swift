@@ -198,6 +198,10 @@ public final class MTPLXBackendStore: ObservableObject {
     @Published public private(set) var connectionState: MetricsConnectionState = .idle
     @Published public private(set) var startupPhase: DaemonStartupPhase = .idle
     @Published public private(set) var health: HealthPayload?
+    /// Seconds the running daemon has gone without answering /health while
+    /// its process and port still look alive (issue #487): "busy", not dead.
+    /// nil whenever the last probe was answered.
+    @Published public private(set) var daemonUnresponsiveFor: TimeInterval?
     @Published public private(set) var capabilities: AppCapabilities?
     @Published public private(set) var snapshot: DashboardSnapshot?
     @Published public private(set) var latest: MetricsLatest?
@@ -1949,7 +1953,7 @@ public final class MTPLXBackendStore: ObservableObject {
         } catch {
             guard isCurrent?() ?? true else { throw error }
             if markUnreachableOnTransportFailure {
-                markDaemonUnreachableIfNeeded(
+                await markDaemonUnreachableUnlessAlive(
                     reason: tr("MTPLX lost contact with the model server. Start it again.")
                 )
             }
@@ -1963,7 +1967,7 @@ public final class MTPLXBackendStore: ObservableObject {
         } catch is DecodingError {
             throw MTPLXAPIClientError.invalidResponse
         } catch {
-            markDaemonUnreachableIfNeeded(
+            await markDaemonUnreachableUnlessAlive(
                 reason: tr("MTPLX lost contact with live metrics. Start it again.")
             )
             throw error
@@ -2752,7 +2756,9 @@ public final class MTPLXBackendStore: ObservableObject {
     }
 
     public func markDaemonUnreachable(reason: String) {
-        markDaemonUnreachableIfNeeded(reason: reason)
+        Task { @MainActor [weak self] in
+            await self?.markDaemonUnreachableUnlessAlive(reason: reason)
+        }
     }
 
     private var shouldProbeDaemonHealth: Bool {
@@ -2771,6 +2777,67 @@ public final class MTPLXBackendStore: ObservableObject {
     /// merely slow.
     private static let watchdogProbeDeadlineSeconds: TimeInterval = 10
 
+    /// Issue #487: a daemon inside a long generation-final prefix commit
+    /// answered nothing on /health for 19-25 s and was reaped on the second
+    /// missed probe while its commit succeeded. A daemon whose process is
+    /// alive and whose port still accepts a TCP connection is "busy", never
+    /// dead; it is reaped only after this much unbroken silence, or the
+    /// moment its process is gone or its port closes.
+    private static let watchdogBusyGraceSeconds: TimeInterval = 90
+    /// TCP handshake budget for the port half of the liveness evidence.
+    private static let watchdogPortProbeSeconds: TimeInterval = 1
+
+    private static func describe(_ reason: DaemonReapReason) -> String {
+        switch reason {
+        case .processGone:
+            return "the daemon process is gone"
+        case .portClosed:
+            return "the daemon port no longer accepts connections"
+        case .unresponsiveGraceExpired(let seconds):
+            return "no /health answer for \(Int(seconds)) s with the process still alive"
+        }
+    }
+
+    /// Process + port truth for the watchdog and the single-failure paths,
+    /// gathered off the main actor. The daemon's own reported pid wins over
+    /// the supervisor's root (the wrapper), an adopted daemon has neither
+    /// and is judged by its port alone.
+    private func gatherDaemonLivenessEvidence() async -> DaemonLivenessEvidence {
+        let pid = health?.startup?.pid.map(pid_t.init) ?? supervisor.daemonProcessIdentifier()
+        let processAlive = pid.map(DaemonSupervisor.processIsAlive)
+        let url = baseURL
+        let portAccepting = await Task.detached(priority: .utility) {
+            TCPConnectProbe.accepts(url: url, timeoutSeconds: Self.watchdogPortProbeSeconds)
+        }.value
+        return DaemonLivenessEvidence(processAlive: processAlive, portAccepting: portAccepting)
+    }
+
+    /// Liveness gate for the single-failure paths (a refresh that timed out,
+    /// a chat stream that lost its connection). Those callers used to reap
+    /// on ONE failed request; a daemon mid-commit fails exactly that way
+    /// while alive. When process and port say alive the daemon is treated
+    /// as busy and the watchdog keeps the decision; otherwise the old reap
+    /// runs unchanged.
+    private func markDaemonUnreachableUnlessAlive(reason: String) async {
+        switch daemonState {
+        case .running, .warming, .starting:
+            break
+        case .stopped, .degraded, .stopping, .crashed:
+            return
+        }
+        let transportGeneration = daemonTransportGeneration
+        let evidence = await gatherDaemonLivenessEvidence()
+        guard daemonTransportGeneration == transportGeneration else { return }
+        if evidence.indicatesLiveDaemon {
+            await supervisor.logs.append(
+                "daemon did not answer (\(reason)) but its process is alive and the port accepts connections; treating it as busy, the watchdog reaps only after \(Int(Self.watchdogBusyGraceSeconds)) s of silence",
+                stream: .system
+            )
+            return
+        }
+        markDaemonUnreachableIfNeeded(reason: reason)
+    }
+
     private func startDaemonHealthWatchdog() {
         healthWatchTask?.cancel()
         let watchdogTransportGeneration = daemonTransportGeneration
@@ -2780,14 +2847,18 @@ public final class MTPLXBackendStore: ObservableObject {
         )
         healthWatchTask = Task { @MainActor [weak self] in
             defer { probeClient.session.finishTasksAndInvalidate() }
-            var consecutiveMisses = 0
+            var tracker = DaemonLivenessTracker(
+                missesBeforeReap: 2,
+                busyGraceSeconds: Self.watchdogBusyGraceSeconds
+            )
             var loggedUndecodable = false
+            var loggedBusy = false
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 guard let self, !Task.isCancelled else { return }
                 guard self.daemonTransportGeneration == watchdogTransportGeneration else { return }
                 guard self.shouldProbeDaemonHealth else {
-                    consecutiveMisses = 0
+                    tracker.recordAnswer()
                     continue
                 }
                 let liveness = await probeClient.livenessWithinDeadline(
@@ -2798,7 +2869,9 @@ public final class MTPLXBackendStore: ObservableObject {
                 else { return }
                 switch liveness {
                 case .healthy(let health) where health.ok:
-                    consecutiveMisses = 0
+                    tracker.recordAnswer()
+                    loggedBusy = false
+                    self.daemonUnresponsiveFor = nil
                     self.health = health
                     // Keep the last-known mode when a probe can't verify:
                     // blanking here flipped the fan toggle to the "smart"
@@ -2817,7 +2890,8 @@ public final class MTPLXBackendStore: ObservableObject {
                     // to kill a serving process (2026-07-06: the watchdog
                     // reaped a healthy daemon 95 s after an OpenCode run
                     // because one /health field stopped matching Codable).
-                    consecutiveMisses = 0
+                    tracker.recordAnswer()
+                    self.daemonUnresponsiveFor = nil
                     if !loggedUndecodable {
                         guard self.daemonTransportGeneration == watchdogTransportGeneration else { return }
                         loggedUndecodable = true
@@ -2831,7 +2905,8 @@ public final class MTPLXBackendStore: ObservableObject {
                 case .aliveUnauthorized:
                     // 401/403 proves a live daemon; an API-key mismatch is a
                     // configuration problem, never grounds to reap.
-                    consecutiveMisses = 0
+                    tracker.recordAnswer()
+                    self.daemonUnresponsiveFor = nil
                     if !loggedUndecodable {
                         guard self.daemonTransportGeneration == watchdogTransportGeneration else { return }
                         loggedUndecodable = true
@@ -2844,13 +2919,40 @@ public final class MTPLXBackendStore: ObservableObject {
                 case .unreachable:
                     break
                 }
-                consecutiveMisses += 1
-                guard consecutiveMisses >= 2 else { continue }
-                guard self.daemonTransportGeneration == watchdogTransportGeneration else { return }
-                self.markDaemonUnreachableIfNeeded(
-                    reason: tr("MTPLX lost contact with the model server. Start it again.")
+                // A miss. Process + port truth decides (issue #487): a daemon
+                // mid-commit is silent on /health for 20 s but alive.
+                let evidence = await self.gatherDaemonLivenessEvidence()
+                guard !Task.isCancelled,
+                      self.daemonTransportGeneration == watchdogTransportGeneration
+                else { return }
+                let verdict = tracker.recordMiss(
+                    evidence: evidence,
+                    now: ProcessInfo.processInfo.systemUptime
                 )
-                return
+                switch verdict {
+                case .waiting:
+                    continue
+                case .busy(let unresponsiveFor):
+                    self.daemonUnresponsiveFor = unresponsiveFor
+                    if !loggedBusy {
+                        loggedBusy = true
+                        await self.supervisor.logs.append(
+                            "daemon has not answered /health for \(Int(unresponsiveFor)) s but its process is alive and the port accepts connections; treating it as busy (reap only after \(Int(Self.watchdogBusyGraceSeconds)) s of silence)",
+                            stream: .system
+                        )
+                    }
+                    continue
+                case .reap(let why):
+                    guard self.daemonTransportGeneration == watchdogTransportGeneration else { return }
+                    await self.supervisor.logs.append(
+                        "daemon watchdog reaping: \(Self.describe(why))",
+                        stream: .system
+                    )
+                    self.markDaemonUnreachableIfNeeded(
+                        reason: tr("MTPLX lost contact with the model server. Start it again.")
+                    )
+                    return
+                }
             }
         }
     }
@@ -2873,6 +2975,7 @@ public final class MTPLXBackendStore: ObservableObject {
         connectionState = .failed(reason)
         daemonState = .degraded(reason)
         startupPhase = .failed(reason)
+        daemonUnresponsiveFor = nil
         clearLiveMetricsState()
 
         let previousTeardown = daemonTeardownTask

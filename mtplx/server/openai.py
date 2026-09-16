@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import base64
 import asyncio
+import inspect
 import traceback
 import builtins
 import errno
@@ -5086,6 +5087,36 @@ _VISION_EMBED_CACHE: (
     "OrderedDict[tuple[str, int], tuple[Any, int, tuple[int, int, int]]]"
 ) = OrderedDict()
 _VISION_EMBED_CACHE_MAX_ROWS = 32768
+# The cache is read on the request path and on the model-owner thread's
+# generation-final commit; mutations of the OrderedDict are serialized here.
+# The tower forward itself never runs under this lock.
+_VISION_EMBED_CACHE_LOCK = threading.Lock()
+
+
+def _vision_embed_cache_evict_locked(pinned: frozenset[tuple[str, int]]) -> None:
+    """Trim the row-budgeted LRU, never evicting a pinned key.
+
+    Issue #487: an agent history whose screenshots together exceed the row
+    budget scanned the LRU sequentially -- the request embedded images
+    1..K and evicted the oldest ones on the way, so the generation-final
+    commit (which walks the same images in the same order) missed on
+    every one of them and re-ran the tower K times on the model-owner
+    thread; the commit that normally takes 0.2 s took 20-25 s. The
+    images of the prompt being materialized are pinned for the pass, so
+    a prompt is never evicted by itself and its commit hits 100%. The
+    cache may exceed the budget by at most one prompt's rows, which are
+    resident in that prompt's KV anyway.
+    """
+    cached_rows = sum(entry[1] for entry in _VISION_EMBED_CACHE.values())
+    if cached_rows <= _VISION_EMBED_CACHE_MAX_ROWS:
+        return
+    for key in list(_VISION_EMBED_CACHE.keys()):
+        if cached_rows <= _VISION_EMBED_CACHE_MAX_ROWS or len(_VISION_EMBED_CACHE) <= 1:
+            return
+        if key in pinned:
+            continue
+        evicted = _VISION_EMBED_CACHE.pop(key)
+        cached_rows -= evicted[1]
 
 
 def _vision_embed_cache_enabled() -> bool:
@@ -5119,9 +5150,22 @@ def _image_content_digest(raw: bytes) -> int:
 
 
 def _vision_rows_for_image(
-    state: Any, model_dir: Any, preprocessor_config: dict, raw: bytes, digest: int
+    state: Any,
+    model_dir: Any,
+    preprocessor_config: dict,
+    raw: bytes,
+    digest: int,
+    *,
+    pinned: frozenset[tuple[str, int]] | None = None,
+    timing: dict[str, Any] | None = None,
 ) -> tuple[Any, int, tuple[int, int, int]]:
-    """Embedding rows, pad count and (t, h, w) grid for one image (digest LRU)."""
+    """Embedding rows, pad count and (t, h, w) grid for one image (digest LRU).
+
+    ``pinned`` names the cache keys of the prompt currently being
+    materialized; they survive this call's eviction pass (see
+    _vision_embed_cache_evict_locked). ``timing`` (caller-owned) receives
+    hit/miss counts and the tower wall so a slow commit can be attributed.
+    """
 
     from mtplx.vision import load_vision_tower
     from mtplx.vision.processing import (
@@ -5132,10 +5176,15 @@ def _vision_rows_for_image(
 
     cache_key = (str(model_dir), int(digest))
     if _vision_embed_cache_enabled():
-        hit = _VISION_EMBED_CACHE.get(cache_key)
+        with _VISION_EMBED_CACHE_LOCK:
+            hit = _VISION_EMBED_CACHE.get(cache_key)
+            if hit is not None:
+                _VISION_EMBED_CACHE.move_to_end(cache_key)
         if hit is not None:
-            _VISION_EMBED_CACHE.move_to_end(cache_key)
+            if timing is not None:
+                timing["vision_cache_hits"] = int(timing.get("vision_cache_hits", 0)) + 1
             return hit
+    tower_started = time.perf_counter()
     pixel_values, grids = preprocess_images([decode_image(raw)], preprocessor_config)
     pad_count = image_pad_token_count(grids[0])
     grid = tuple(int(x) for x in grids[0])
@@ -5144,19 +5193,26 @@ def _vision_rows_for_image(
     import mlx.core as _mx
 
     _mx.eval(rows)
+    if timing is not None:
+        timing["vision_tower_misses"] = int(timing.get("vision_tower_misses", 0)) + 1
+        timing["vision_tower_s"] = float(timing.get("vision_tower_s", 0.0)) + (
+            time.perf_counter() - tower_started
+        )
     if _vision_embed_cache_enabled():
-        _VISION_EMBED_CACHE[cache_key] = (rows, pad_count, grid)
-        cached_rows = sum(entry[1] for entry in _VISION_EMBED_CACHE.values())
-        while (
-            cached_rows > _VISION_EMBED_CACHE_MAX_ROWS and len(_VISION_EMBED_CACHE) > 1
-        ):
-            _, evicted = _VISION_EMBED_CACHE.popitem(last=False)
-            cached_rows -= evicted[1]
+        with _VISION_EMBED_CACHE_LOCK:
+            _VISION_EMBED_CACHE[cache_key] = (rows, pad_count, grid)
+            _vision_embed_cache_evict_locked(
+                (pinned or frozenset()) | frozenset({cache_key})
+            )
     return rows, pad_count, grid
 
 
 def _materialize_vision_splice(
-    state: Any, images: list[bytes], prompt_ids: list[int]
+    state: Any,
+    images: list[bytes],
+    prompt_ids: list[int],
+    *,
+    timing: dict[str, Any] | None = None,
 ) -> tuple[list[int], Any]:
     """Run the tower (or its digest cache) and return (expanded ids, splice)."""
 
@@ -5172,16 +5228,23 @@ def _materialize_vision_splice(
     preprocessor_config = _json.loads(
         (model_dir / "preprocessor_config.json").read_text(encoding="utf-8")
     )
-    digests: list[int] = []
+    digests: list[int] = [_image_content_digest(raw) for raw in images]
+    # Every image of THIS prompt stays cached for the whole pass (#487):
+    # the eviction that runs after each insert skips these keys.
+    pinned = frozenset((str(model_dir), int(digest)) for digest in digests)
     row_blocks: list[Any] = []
     pad_counts: list[int] = []
     grids: list[tuple[int, int, int]] = []
-    for raw in images:
-        digest = _image_content_digest(raw)
+    for raw, digest in zip(images, digests):
         rows, pad_count, grid = _vision_rows_for_image(
-            state, model_dir, preprocessor_config, raw, digest
+            state,
+            model_dir,
+            preprocessor_config,
+            raw,
+            digest,
+            pinned=pinned,
+            timing=timing,
         )
-        digests.append(digest)
         row_blocks.append(rows)
         pad_counts.append(pad_count)
         grids.append(grid)
@@ -21507,9 +21570,15 @@ def _history_ids_for_postcommit(
     strip_tool_call_preamble_text: bool = False,
     committed_stream_ids: Sequence[int] | None = None,
     session_committed_ids: Sequence[int] | None = None,
+    timing: dict[str, Any] | None = None,
 ) -> tuple[list[int], Any]:
     """Retokenized next-turn history ids, plus a VisionSplice when the
     history carries images.
+
+    ``timing`` (caller-owned dict) receives the wall of each phase --
+    flatten_s, canonicalize_s, committed_decode_s, render_encode_s,
+    vision_splice_s -- plus vision_images and the embed-cache hit/miss
+    counts, so a slow generation-final commit names its phase (#487).
 
     Image content parts flatten to vision placeholders exactly like the
     live request path, and the resulting single pad tokens are expanded to
@@ -21542,12 +21611,16 @@ def _history_ids_for_postcommit(
             tool_calls=assistant_tool_calls,
         ),
     ]
+    phase_started = time.perf_counter()
     try:
         history_messages, postcommit_vision_images = _vision_extract_and_flatten(
             history_messages
         )
     except ValueError:
         return [], None
+    phase_started = _record_phase(timing, "flatten_s", phase_started)
+    if timing is not None:
+        timing["vision_images"] = len(postcommit_vision_images)
     postcommit_transcript_stats: Any | None = None
     if tool_specs:
         # The generation prompt may compact the current large read as an
@@ -21573,6 +21646,7 @@ def _history_ids_for_postcommit(
             == _POSTCOMMIT_SENTINEL_CONTENT
         ):
             history_messages = history_messages[:-1]
+    phase_started = _record_phase(timing, "canonicalize_s", phase_started)
     # Committed-think substitution for the postcommit (audit F11 #3, the
     # issue #269 bug): the banked next-turn prefix must be built from the
     # SAME canonical encoding the next request will actually send. The next
@@ -21660,6 +21734,7 @@ def _history_ids_for_postcommit(
         history_messages = [
             _scrub_inbound_committed_reasoning(message) for message in history_messages
         ]
+    phase_started = _record_phase(timing, "committed_decode_s", phase_started)
     next_turn_prefix_ids = _postcommit_next_turn_prefix_ids(
         state.runtime.tokenizer,
         history_messages,
@@ -21688,15 +21763,42 @@ def _history_ids_for_postcommit(
         # silently drops them and the prefix stops extending the session.
         allow_committed_reasoning=True,
     )
+    phase_started = _record_phase(timing, "render_encode_s", phase_started)
     if not postcommit_vision_images or not history_ids:
         return list(history_ids or []), None
     try:
         expanded_ids, history_splice = _materialize_vision_splice(
-            state, postcommit_vision_images, list(history_ids)
+            state, postcommit_vision_images, list(history_ids), timing=timing
         )
     except Exception:
         return [], None
+    finally:
+        _record_phase(timing, "vision_splice_s", phase_started)
     return expanded_ids, history_splice
+
+
+def _record_phase(
+    timing: dict[str, Any] | None, key: str, started: float
+) -> float:
+    """Store ``now - started`` under ``key`` (when timing is on); return now."""
+    now = time.perf_counter()
+    if timing is not None:
+        timing[key] = round(now - started, 6)
+    return now
+
+
+def _callable_accepts_keyword(fn: Any, name: str) -> bool:
+    """True when ``fn(..., name=...)`` is accepted (explicit or **kwargs)."""
+    try:
+        parameters = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if name in parameters:
+        return True
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
 
 
 def _generation_final_postcommit_compatibility(
@@ -21713,6 +21815,7 @@ def _generation_final_postcommit_compatibility(
     tool_prompt_mode: str | None = None,
     strip_tool_call_preamble_text: bool = False,
     session: Any | None = None,
+    timing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     # Tool-call turns are no longer refused a priori (the retired
     # "tool_call_history_rewrite" gate): the byte-compare below is the real
@@ -21761,6 +21864,7 @@ def _generation_final_postcommit_compatibility(
     final_token_ids = [int(token) for token in prompt_ids] + final_generated_tokens
     if not final_token_ids:
         return {"safe": False, "mode": "unsafe", "reason": "empty_generation_boundary"}
+    history_started = time.perf_counter()
     history_ids, history_vision_splice = _history_ids_for_postcommit(
         state,
         messages=messages,
@@ -21785,7 +21889,9 @@ def _generation_final_postcommit_compatibility(
             if session is not None
             else None
         ),
+        timing=timing,
     )
+    _record_phase(timing, "history_s", history_started)
 
     def _bank_view(token_ids: list[int]) -> list[int] | None:
         """Content-keyed ids for the bank; identity for text histories."""
@@ -22067,6 +22173,11 @@ def _store_generation_final_history_snapshot(
                 session = peek(session_id)
             except Exception:
                 session = None
+    # Phase receipts (#487): a commit that normally takes 0.2 s took 20-25 s
+    # four times in one day on a 110-150k vision agent session, and the
+    # single elapsed_s could not say whether the history render, the
+    # vision tower, the tokenizer, or the bank put was the slow half.
+    timing: dict[str, Any] = {}
     started = time.perf_counter()
     compatibility = _generation_final_postcommit_compatibility(
         state,
@@ -22081,7 +22192,9 @@ def _store_generation_final_history_snapshot(
         tool_prompt_mode=tool_prompt_mode,
         strip_tool_call_preamble_text=strip_tool_call_preamble_text,
         session=session,
+        timing=timing,
     )
+    _record_phase(timing, "compat_s", started)
     final_state = generated.get("_final_state")
     prompt_boundary_safe = bool(
         final_state is not None
@@ -22093,6 +22206,7 @@ def _store_generation_final_history_snapshot(
             "mode": compatibility.get("mode", "unsafe"),
             "reason": compatibility.get("reason", "unsafe_history"),
             "elapsed_s": time.perf_counter() - started,
+            "timing": timing,
         }
         for key in ("history_tokens", "generation_boundary_tokens"):
             if key in compatibility:
@@ -22113,21 +22227,27 @@ def _store_generation_final_history_snapshot(
         final_token_ids=compatibility.get("token_ids") or prompt_ids,
     )
     token_ids = bank_values.pop("token_ids")
+    lock_started = time.perf_counter()
     acquired = state.lock.acquire(blocking=False)
+    _record_phase(timing, "lock_wait_s", lock_started)
     if not acquired:
         return {
             "stored": False,
             "mode": "unsafe",
             "reason": "model_lock_busy_before_generation_final_commit",
             "elapsed_s": time.perf_counter() - started,
+            "timing": timing,
         }
     try:
+        phase_started = time.perf_counter()
         bank_metadata = _generation_final_bank_metadata(
             state,
             final_state,
             token_count=len(token_ids),
         )
-        entry = state.sessions.bank.put(
+        phase_started = _record_phase(timing, "mtp_snapshot_s", phase_started)
+        bank = state.sessions.bank
+        put_kwargs: dict[str, Any] = dict(
             runtime=state.runtime,
             token_ids=token_ids,
             keep_live_ref=bool(keep_live_ref),
@@ -22139,6 +22259,16 @@ def _store_generation_final_history_snapshot(
             **bank_values,
             **bank_metadata,
         )
+        # The bank's own per-phase receipt (trunk snapshot, entry build,
+        # cold-tier dispatch, settle dispatch); test doubles without the
+        # keyword keep their exact contract.
+        put_timing: dict[str, Any] = {}
+        if _callable_accepts_keyword(bank.put, "timing_out"):
+            put_kwargs["timing_out"] = put_timing
+        entry = bank.put(**put_kwargs)
+        _record_phase(timing, "put_s", phase_started)
+        if put_timing:
+            timing["put"] = put_timing
     finally:
         state.lock.release()
     if entry is None:
@@ -22147,6 +22277,7 @@ def _store_generation_final_history_snapshot(
             "mode": compatibility["mode"],
             "reason": "sessionbank_snapshot_skipped",
             "elapsed_s": time.perf_counter() - started,
+            "timing": timing,
         }
         _flight(state).pc(session_id, {"action": "generation_final", **outcome})
         return outcome
@@ -22175,6 +22306,7 @@ def _store_generation_final_history_snapshot(
             else int(compatibility.get("history_suffix_tokens") or 0)
         ),
         "token_hash": entry.token_hash,
+        "timing": timing,
     }
     if "token_splice" in compatibility:
         outcome["token_splice"] = compatibility["token_splice"]
@@ -31259,9 +31391,16 @@ def create_app(state: ServerState) -> FastAPI:
             if _canonicalized is not None:
                 messages_for_generation, prompt_ids = _canonicalized
         if vision_images:
+            # Off the event loop (#487): the tower forwards for every image
+            # of the prompt ran inside this coroutine, so a history whose
+            # screenshots missed the embed cache froze the whole server --
+            # /health included -- for as long as the tower took. The
+            # embeddings are evaluated before they cross threads, exactly
+            # as before; only the thread doing the work changes (the same
+            # to_thread pattern the non-stream generation path uses).
             try:
-                prompt_ids, vision_splice = _materialize_vision_splice(
-                    state, vision_images, prompt_ids
+                prompt_ids, vision_splice = await asyncio.to_thread(
+                    _materialize_vision_splice, state, vision_images, prompt_ids
                 )
             except ValueError as vision_error:
                 raise HTTPException(status_code=400, detail=str(vision_error))

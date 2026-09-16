@@ -312,6 +312,23 @@ public final class DaemonSupervisor: @unchecked Sendable {
         }
     }
 
+    /// The daemon root pid this supervisor owns or adopted, for liveness
+    /// checks that must not depend on HTTP answering (issue #487).
+    public func daemonProcessIdentifier() -> pid_t? {
+        lock.withLock {
+            if let process, process.isRunning {
+                return process.processIdentifier
+            }
+            return adoptedProcessID
+        }
+    }
+
+    /// `kill(pid, 0)` liveness: the same test Stop uses to decide whether a
+    /// family member still needs a signal.
+    public static func processIsAlive(_ pid: pid_t) -> Bool {
+        pidIsAlive(pid)
+    }
+
     public func start(
         command: DaemonCommand,
         healthBaseURL: URL,
