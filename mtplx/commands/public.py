@@ -13652,6 +13652,7 @@ def _quickstart_autoselect_busy_port(
             PORT_FOREIGN,
             app_configured_port,
             classify_port_occupant,
+            describe_foreign_listener,
             find_free_port,
             port_busy_advice,
             wait_for_port_settle,
@@ -13666,7 +13667,11 @@ def _quickstart_autoselect_busy_port(
         if occupant.kind != PORT_FOREIGN:
             return
         if configured:
-            for line in port_busy_advice(occupant, port=port):
+            # Issue #503: name the holder. A daemon the app launched that
+            # wedged (socket alive, /health dead) looks foreign by probe
+            # alone; the pid and the launch marker say what it is.
+            listener = describe_foreign_listener(port)
+            for line in port_busy_advice(occupant, port=port, listener=listener):
                 _quickstart_line(line)
             _quickstart_line(
                 f"Keeping the configured port {port} (never moved silently)."

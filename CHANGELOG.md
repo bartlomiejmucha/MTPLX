@@ -77,6 +77,21 @@ All notable user-facing changes to MTPLX. The format is based on
 
 ### Fixed
 
+- **A wedged daemon of the app's own no longer moves the configured port,
+  and a port fallback is never saved** (issue #503). After a hard freeze
+  the daemon's listener could survive while `/health` stopped answering;
+  the app's port preflight read that as "another app", moved to the next
+  free port, saved the new port to settings, and every client pinned to
+  the configured port (an agent connector on 8001) was stranded for good,
+  with the engine showing Running. The preflight now asks the OS who holds
+  the port: a listener carrying the app's own launch marker in its
+  environment is reaped in place and the configured port is kept. For a
+  genuinely foreign occupant the launch still moves to a free port, but
+  only for that launch: settings keep the configured port, a save made
+  meanwhile writes the configured port back (changing the port on purpose
+  still wins), the banner stays until the next start, and the next start
+  tries the configured port again. A listener without the marker (a
+  stranger's app, a CLI-started `mtplx serve`) is never signalled.
 - **Deep-context sessions persist on the machines that can restore them**
   (PR #496, Dizzler7). A 12 GiB warm snapshot (Qwen3.8-27B, Q8 KV, more
   than 100k tokens) was refused by the flat 8 GiB per-session cap on Macs

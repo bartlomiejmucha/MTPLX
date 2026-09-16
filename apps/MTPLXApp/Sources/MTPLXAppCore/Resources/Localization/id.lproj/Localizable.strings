@@ -1022,6 +1022,7 @@
 "Port %@ is held by an MTPLX server started outside the app. Press Ctrl-C in its terminal or run `mtplx stop --port %@`, then press Play." = "Port %@ digunakan oleh server MTPLX yang dimulai di luar aplikasi. Tekan Ctrl-C di terminalnya atau jalankan `mtplx stop --port %@`, lalu tekan Putar.";
 "Port %@ is running another MTPLX server. Stop it where it was started, or run `mtplx stop --port %@` in Terminal, then press Play." = "Port %@ sedang menjalankan server MTPLX lain. Hentikan di tempat ia dimulai, atau jalankan `mtplx stop --port %@` di Terminal, lalu tekan Putar.";
 "Port %@ was busy. MTPLX now uses port %@." = "Port %@ sedang sibuk. MTPLX sekarang menggunakan port %@.";
+"Port %@ was in use by %@. MTPLX is using port %@ for now; the port in Settings is unchanged and will be tried again at the next start." = "Port %@ sedang dipakai oleh %@. MTPLX memakai port %@ untuk sementara; port di Pengaturan tidak berubah dan akan dicoba lagi saat mulai berikutnya.";
 "Port %@ was in use by %@. MTPLX now uses port %@." = "Port %@ sedang digunakan oleh %@. MTPLX sekarang menggunakan port %@.";
 "Port changed" = "Port diubah";
 "Port is already used by another local app (%@)." = "Port sudah digunakan oleh aplikasi lokal lain (%@).";

@@ -1022,6 +1022,7 @@
 "Port %@ is held by an MTPLX server started outside the app. Press Ctrl-C in its terminal or run `mtplx stop --port %@`, then press Play." = "ポート%@はアプリ外で起動されたMTPLXサーバーによって占有されています。そのターミナルでCtrl-Cを押すか、`mtplx stop --port %@`を実行してから「再生」を押してください。";
 "Port %@ is running another MTPLX server. Stop it where it was started, or run `mtplx stop --port %@` in Terminal, then press Play." = "ポート%@で別のMTPLXサーバーが実行されています。起動元で停止するか、Terminalで `mtplx stop --port %@` を実行してから「再生」を押してください。";
 "Port %@ was busy. MTPLX now uses port %@." = "ポート%@は使用中でした。MTPLXはポート%@を使用します。";
+"Port %@ was in use by %@. MTPLX is using port %@ for now; the port in Settings is unchanged and will be tried again at the next start." = "ポート %@ は %@ に使用されていました。MTPLX は当面ポート %@ を使用します。設定のポートは変更されず、次回の起動時に再試行されます。";
 "Port %@ was in use by %@. MTPLX now uses port %@." = "ポート%@は%@によって使用中でした。MTPLXはポート%@を使用します。";
 "Port changed" = "ポートが変更されました";
 "Port is already used by another local app (%@)." = "ポートは別のローカルアプリ（%@）によって既に使用されています。";
