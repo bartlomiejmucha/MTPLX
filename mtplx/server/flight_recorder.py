@@ -414,6 +414,10 @@ class FlightRecorder:
             "prefix_len",
             "divergence_token",
             "divergence_offset_in_turn",
+            # Per-phase wall of the generation-final commit (#487): which
+            # half of a 20 s commit was slow -- history render, vision
+            # tower, tokenizer, or the bank put.
+            "timing",
         ):
             if key in payload:
                 event[key] = payload[key]

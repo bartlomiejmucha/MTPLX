@@ -636,7 +636,11 @@ class SessionBank:
 
     @property
     def total_nbytes(self) -> int:
-        return sum(entry.nbytes for entry in self._entries.values())
+        # Snapshot the values: /health reads this from a server thread while
+        # the model owner mutates the dict inside put() (#487 -- a
+        # "dictionary changed size during iteration" 500 counts as a
+        # watchdog miss in the app). list() of a dict is atomic under the GIL.
+        return sum(entry.nbytes for entry in list(self._entries.values()))
 
     def effective_max_bytes(self) -> int:
         """The byte budget in force right now.
@@ -688,7 +692,9 @@ class SessionBank:
             return set()
         cutoff = time.monotonic() - self.active_pin_ttl_s
         return {
-            sid for sid, ts in self._session_last_active.items() if ts >= cutoff
+            sid
+            for sid, ts in list(self._session_last_active.items())
+            if ts >= cutoff
         }
 
     def warn_oversized_snapshot_skip(
@@ -2004,7 +2010,9 @@ class SessionBank:
                         for record in (getattr(entry, "gdn_boundaries", None) or [])
                     ],
                 }
-                for entry in sorted(self._entries.values(), key=lambda item: item.prefix_len)
+                for entry in sorted(
+                    list(self._entries.values()), key=lambda item: item.prefix_len
+                )
             ],
             "eviction_log": list(self.eviction_log)[-16:],
         }
