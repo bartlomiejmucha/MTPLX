@@ -2914,12 +2914,12 @@ def cmd_gc_public(args: Any) -> int:
     is also given.
     """
 
-    from mtplx.session_bank_gc import DEFAULT_COLD_TIER_DIR, collect_garbage
+    from mtplx.cache_bank.reconcile import DEFAULT_COLD_TIER_DIR, collect_garbage
 
     json_output = bool(getattr(args, "json", False))
     apply = bool(getattr(args, "apply", False))
     force = bool(getattr(args, "force", False))
-    base_dir = getattr(args, "dir", None) or DEFAULT_COLD_TIER_DIR
+    base_dir = getattr(args, "dir", None) or _configured_session_bank_dir() or DEFAULT_COLD_TIER_DIR
 
     def emit(payload: dict[str, Any], *, lines: list[str]) -> None:
         if json_output:
@@ -2953,7 +2953,8 @@ def cmd_gc_public(args: Any) -> int:
     report = collect_garbage(base_dir, dry_run=not apply)
     orphan_entries = len(report["orphan_entry_dirs"])
     orphan_blobs = report["orphan_blob_files"]
-    orphan_bytes = report["orphan_blob_bytes"] + report["evicted_entries_bytes"]
+    orphan_bytes = report["orphan_file_bytes"]
+    live_bytes = max(0, report["disk_bytes"] - report["database_disk_bytes"])
     verb = "Deleted" if apply else "Would delete"
     lines = [
         (
@@ -2962,12 +2963,34 @@ def cmd_gc_public(args: Any) -> int:
             f"{orphan_bytes / 1e9:.2f} GB "
             f"(evicted_entries/: {report['evicted_entries_bytes'] / 1e9:.2f} GB) "
             f"in {report['base_dir']}."
-        )
+        ),
+        (
+            f"{report['entries']} live entr{'y' if report['entries'] == 1 else 'ies'}, "
+            f"{live_bytes / 1e9:.2f} GB on disk after cleanup."
+            if apply
+            else f"{report['entries']} live entr{'y' if report['entries'] == 1 else 'ies'}, "
+            f"{live_bytes / 1e9:.2f} GB on disk."
+        ),
     ]
+    if not report["manifest_found"]:
+        lines.append("No manifest.sqlite: nothing in this directory is restorable.")
     if not apply and (orphan_entries or orphan_blobs or report["evicted_entries_bytes"]):
         lines.append("Re-run with --apply to delete.")
     emit(report, lines=lines)
     return 0
+
+
+def _configured_session_bank_dir() -> str | None:
+    """The SSD session-cache directory the saved config points the daemon at."""
+
+    try:
+        from mtplx.config import load_user_config
+
+        value = getattr(load_user_config(), "ssd_session_cache_dir", None)
+    except (OSError, ValueError, ImportError):
+        return None
+    value = str(value or "").strip()
+    return value or None
 
 
 def _parse_settings_pairs(pairs: list[str]) -> tuple[dict[str, Any], list[str]]:

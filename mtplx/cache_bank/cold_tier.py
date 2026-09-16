@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from collections import deque
+from collections import Counter, deque
 import json
 import logging
 import os
@@ -29,6 +29,15 @@ from .codec import (
     encode_payload,
     payload_supports_prefix_decode,
     snapshot_supports_prefix_decode,
+)
+from .reconcile import (
+    DEFAULT_COLD_TIER_DIR,
+    ReconcileReport,
+    entry_blob_hashes as _entry_blob_hashes_of,
+    manifest_blob_hashes as _manifest_blob_hashes_of,
+    manifest_entry_dirs as _manifest_entry_dirs_of,
+    prune_empty_parents as _prune_empty_parents_of,
+    reconcile_store,
 )
 
 
@@ -72,7 +81,8 @@ def _eval_payload_trees(*trees: Any) -> None:
 # identity flag, and encode moved off the caller thread (deferred writer-side
 # encode). v2 stores go through the existing legacy-archive migration.
 COLD_TIER_FORMAT_VERSION = 3
-DEFAULT_COLD_TIER_DIR = Path("~/.mtplx/session-bank").expanduser()
+# DEFAULT_COLD_TIER_DIR is defined once, in .reconcile (MLX-free), and
+# re-exported here for the server and the package namespace.
 DEFAULT_COLD_TIER_MAX_BYTES = 100 * 1024**3
 DEFAULT_COLD_TIER_MIN_PREFIX_TOKENS = 512
 DEFAULT_BLOCK_SIZE = 256
@@ -347,8 +357,15 @@ class SessionBankColdTier:
         min_prefix_tokens: int = DEFAULT_COLD_TIER_MIN_PREFIX_TOKENS,
         writer_queue_depth: int = 32,
         block_size: int = DEFAULT_BLOCK_SIZE,
+        reconcile_listener: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.base_dir = Path(base_dir).expanduser()
+        # Called once with the summary of the reconciliation pass that runs
+        # when the store opens (#493). The server wires its structured
+        # stdout event here; it is a constructor argument because the pass
+        # starts inside __init__ and a small store finishes it in
+        # milliseconds, before any attribute set afterwards could be seen.
+        self.reconcile_listener = reconcile_listener
         self.mode = _normalize_mode(mode)
         self.max_bytes = int(max(1, max_bytes))
         self.min_prefix_tokens = int(max(1, min_prefix_tokens))
@@ -416,6 +433,14 @@ class SessionBankColdTier:
         self._manifest_stats_lock = threading.Lock()
         self._manifest_stats_cache: dict[str, Any] | None = None
         self._orphan_cleanup_running = False
+        self._cleanup_holds_scan_slot = False
+        # Writes in flight, guarded by _base_lock: the entry directory and
+        # blob digests a write will reference once its manifest row lands.
+        # Blobs reach disk in phase 2 (no lock) before the row does, and a
+        # dedupe hit re-references a blob the manifest may not name yet, so
+        # the orphan cleanup consults these before deleting anything.
+        self._inflight_entry_dirs: Counter[str] = Counter()
+        self._inflight_blob_hashes: Counter[str] = Counter()
         self._stats_lock = threading.Lock()
         self._stats: dict[str, int | float | str | bool | None] = {
             "format_version": COLD_TIER_FORMAT_VERSION,
@@ -459,6 +484,25 @@ class SessionBankColdTier:
             daemon=True,
         )
         self._writer.start()
+        # #493: reconcile the store against its manifest once at open, in the
+        # background. The walk yields to foreground traffic, takes the store
+        # lock only per directory batch, and never blocks the boot or the
+        # first request; it also installs the first disk-usage snapshot, so
+        # the first write does not walk the store itself. A fresh store has
+        # nothing to reconcile and skips the pass.
+        if self.enabled and self._store_has_content():
+            self._start_orphan_cleanup(at_start=True)
+
+    def _store_has_content(self) -> bool:
+        for name in ("entries", "blobs", "evicted_entries"):
+            root = self.base_dir / name
+            try:
+                with os.scandir(root) as it:
+                    if next(it, None) is not None:
+                        return True
+            except OSError:
+                continue
+        return False
 
     @property
     def enabled(self) -> bool:
@@ -681,7 +725,12 @@ class SessionBankColdTier:
         entry_id = str(metadata["entry_id"])
         entry_hash_prefix = entry_id[:2]
         final_dir = self.base_dir / "entries" / entry_hash_prefix / entry_id
+        entry_dir_rel = f"entries/{entry_hash_prefix}/{entry_id}"
         self._ensure_disk_usage_snapshot()
+        # This runs on the model-owner thread: it must never walk the store.
+        # Orphans that price it over the cap are reclaimed in the background
+        # and are not charged to this spill meanwhile.
+        self._reclaim_orphans_if_over_cap(estimated, inline=False)
         with self._base_lock:
             self._ensure_store()
             if final_dir.exists():
@@ -711,6 +760,61 @@ class SessionBankColdTier:
                 self._inc("skipped_size_cap")
                 self._warn_spill_size_capped(entry, estimated, effective_cap)
                 return False
+            self._claim_inflight(entry_dirs=(entry_dir_rel,))
+        claimed_digests: set[str] = set()
+        try:
+            return self._spill_entry_admitted(
+                entry,
+                metadata=metadata,
+                entry_id=entry_id,
+                entry_hash_prefix=entry_hash_prefix,
+                final_dir=final_dir,
+                token_ids=token_ids,
+                raise_on_yield=raise_on_yield,
+                claimed_digests=claimed_digests,
+            )
+        finally:
+            self._release_inflight(entry_dirs=(entry_dir_rel,), digests=claimed_digests)
+
+    def _claim_inflight(
+        self, *, entry_dirs: tuple[str, ...] = (), digests: set[str] | None = None
+    ) -> None:
+        """Mark an entry directory and blob digests as owned by a write in
+        flight; the orphan cleanup will not delete them until released.
+        Counted, not flagged: two writes may reference one blob."""
+        with self._base_lock:
+            for rel in entry_dirs:
+                self._inflight_entry_dirs[rel] += 1
+            for digest in digests or ():
+                self._inflight_blob_hashes[digest] += 1
+
+    def _release_inflight(
+        self, *, entry_dirs: tuple[str, ...] = (), digests: set[str] | None = None
+    ) -> None:
+        with self._base_lock:
+            for rel in entry_dirs:
+                if self._inflight_entry_dirs[rel] <= 1:
+                    del self._inflight_entry_dirs[rel]
+                else:
+                    self._inflight_entry_dirs[rel] -= 1
+            for digest in digests or ():
+                if self._inflight_blob_hashes[digest] <= 1:
+                    del self._inflight_blob_hashes[digest]
+                else:
+                    self._inflight_blob_hashes[digest] -= 1
+
+    def _spill_entry_admitted(
+        self,
+        entry: Any,
+        *,
+        metadata: dict[str, Any],
+        entry_id: str,
+        entry_hash_prefix: str,
+        final_dir: Path,
+        token_ids: tuple[int, ...],
+        raise_on_yield: bool,
+        claimed_digests: set[str],
+    ) -> bool:
         should_abort: Callable[[], bool] | None = None
         if self._encode_yield_enabled and self.foreground_busy is not None:
             should_abort = self.foreground_busy
@@ -750,6 +854,11 @@ class SessionBankColdTier:
                 digest = hashlib.sha256(raw).hexdigest()
                 tensor_blobs[name] = {"sha256": digest, "nbytes": len(raw)}
                 written_state["logical"] += len(raw)
+                # Claim the digest before the blob exists on disk so the
+                # orphan cleanup can never take it between write and row.
+                if digest not in claimed_digests:
+                    claimed_digests.add(digest)
+                    tier._claim_inflight(digests={digest})
                 if tier._write_blob(digest, raw):
                     written_state["physical"] += len(raw)
                 else:
@@ -1146,10 +1255,12 @@ class SessionBankColdTier:
                 managed_disk_bytes - database_disk_bytes - manifest_bytes_at_scan,
             )
             stats["orphan_cleanup_running"] = self._orphan_cleanup_is_running()
+            # Reclaimable garbage is the part of untracked_* a cleanup can
+            # free; the rest is live blobs booked under evicted entries.
             if (
                 self.enabled
                 and managed_disk_bytes > self.max_bytes
-                and int(stats["untracked_disk_bytes"]) > 0
+                and int(usage.get("orphan_disk_bytes", 0) or 0) > 0
                 and not bool(usage.get("disk_usage_scan_pending"))
                 and not bool(usage.get("disk_usage_stale"))
             ):
@@ -1472,6 +1583,7 @@ class SessionBankColdTier:
         # bound the collision to one blob's hash.
         entry_hash_prefix = pending.entry_id[:2]
         final_dir = self.base_dir / "entries" / entry_hash_prefix / pending.entry_id
+        entry_dir_rel = f"entries/{entry_hash_prefix}/{pending.entry_id}"
         with self._base_lock:
             self._ensure_store()
             if final_dir.exists():
@@ -1482,6 +1594,47 @@ class SessionBankColdTier:
         tensor_blobs, missing_blob_bytes = self._plan_tensor_blobs(
             pending.tensors, pause_for_foreground=True
         )
+        payload = {
+            "format_version": COLD_TIER_FORMAT_VERSION,
+            "metadata": pending.metadata,
+            "payload_spec": pending.payload_spec,
+            "tensor_names": sorted(pending.tensors),
+            "tensor_blobs": tensor_blobs,
+        }
+        payload_text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        pending_bytes = int(missing_blob_bytes + len(payload_text.encode("utf-8")))
+        digests = {str(blob["sha256"]) for blob in tensor_blobs.values()}
+        # Claimed before the reclaim below so a blob this write dedupes
+        # against (an orphan until its row lands) is kept, not rewritten.
+        self._claim_inflight(entry_dirs=(entry_dir_rel,), digests=digests)
+        try:
+            # Phase 0.5 (no lock): if the snapshot prices the store over the
+            # cap and part of that is reclaimable garbage, reclaim it now, on
+            # this thread. A walk here delays durability, never a request,
+            # and it frees room before the gate below would evict live
+            # entries for it.
+            self._reclaim_orphans_if_over_cap(pending_bytes, inline=True)
+            return self._write_pending_admitted(
+                pending,
+                tensor_blobs=tensor_blobs,
+                payload_text=payload_text,
+                pending_bytes=pending_bytes,
+                final_dir=final_dir,
+                entry_hash_prefix=entry_hash_prefix,
+            )
+        finally:
+            self._release_inflight(entry_dirs=(entry_dir_rel,), digests=digests)
+
+    def _write_pending_admitted(
+        self,
+        pending: PendingWrite,
+        *,
+        tensor_blobs: dict[str, dict[str, Any]],
+        payload_text: str,
+        pending_bytes: int,
+        final_dir: Path,
+        entry_hash_prefix: str,
+    ) -> bool:
         # Phase 1 (under lock): admission gates — no bulk IO, no hashing.
         with self._base_lock:
             effective_cap, budget_block = self._effective_write_budget()
@@ -1498,18 +1651,7 @@ class SessionBankColdTier:
             with self._stats_lock:
                 self._stats["low_disk_writes_disabled"] = False
                 self._stats["effective_max_bytes"] = int(effective_cap)
-            payload = {
-                "format_version": COLD_TIER_FORMAT_VERSION,
-                "metadata": pending.metadata,
-                "payload_spec": pending.payload_spec,
-                "tensor_names": sorted(pending.tensors),
-                "tensor_blobs": tensor_blobs,
-            }
-            payload_bytes = len(
-                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            )
             logical_bytes = sum(int(item["nbytes"]) for item in tensor_blobs.values())
-            pending_bytes = int(missing_blob_bytes + payload_bytes)
             if pending_bytes > effective_cap:
                 self._inc("skipped_size_cap")
                 logger.warning(
@@ -1548,10 +1690,7 @@ class SessionBankColdTier:
             temp_parent = self.base_dir / "entries" / entry_hash_prefix
             temp_parent.mkdir(parents=True, exist_ok=True)
             temp_dir = Path(tempfile.mkdtemp(prefix=f".{pending.entry_id}.tmp-", dir=temp_parent))
-            (temp_dir / "payload.json").write_text(
-                json.dumps(payload, sort_keys=True, separators=(",", ":")),
-                encoding="utf-8",
-            )
+            (temp_dir / "payload.json").write_text(payload_text, encoding="utf-8")
             temp_dir.rename(final_dir)
             metadata = dict(pending.metadata)
             metadata["entry_dir"] = str(final_dir.relative_to(self.base_dir))
@@ -1592,7 +1731,13 @@ class SessionBankColdTier:
             return False
         path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = path.with_name(f".{path.name}.tmp-{time.time_ns()}")
-        temp_path.write_bytes(raw)
+        try:
+            temp_path.write_bytes(raw)
+        except FileNotFoundError:
+            # An orphan cleanup pruned the now-empty prefix directory between
+            # the mkdir above and this write; the directory is ours to remake.
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path.write_bytes(raw)
         try:
             temp_path.rename(path)
         except FileExistsError:
@@ -1634,42 +1779,27 @@ class SessionBankColdTier:
         return min(int(self.max_bytes), int(free // 4)), None
 
     def _current_bytes_for_cap(self, required_bytes: int = 0) -> int:
-        """Bytes the cap gate must account for: manifest bytes plus orphans.
+        """Bytes the cap gate prices: the whole managed directory.
 
         The manifest SUM is exact for every tracked entry and costs one SQLite
-        query. Orphan bytes (crash leftovers, untracked entry dirs) come from
-        the last reconciliation snapshot as a delta over the manifest bytes
-        that snapshot saw; that delta survives evictions unchanged, so a
-        snapshot of any age is a sound estimate here. This gate used to force
-        a synchronous full walk of the store on every write (41.7 s per write
-        on an 816k-file bank), which is what the reconciliation walk exists
-        to avoid.
+        query. Everything else on disk (orphans, blobs that outlived the entry
+        whose physical bytes they were booked under, crash leftovers) comes
+        from the last reconciliation snapshot as a delta over the manifest
+        bytes that snapshot saw; the delta survives evictions unchanged, so a
+        snapshot of any age is a sound estimate here. The gate never walks the
+        store (41.7 s per write on an 816k-file bank, the pathology the
+        snapshot exists to avoid): reclaimable orphans are taken by
+        :meth:`_reclaim_orphans_if_over_cap` before the gate runs, and the
+        bytes a pass still running will free are not charged to this write.
         """
-        required = max(0, int(required_bytes))
         manifest_bytes = self._current_bytes()
         untracked_bytes = self._untracked_bytes_estimate()
-        if (
-            self.enabled
-            and manifest_bytes + untracked_bytes + required > self.max_bytes
-            and untracked_bytes > 0
-        ):
-            try:
-                cleanup = self._cleanup_untracked_cache_once()
-                self._record_orphan_cleanup_result(cleanup)
-                # Cleanup deletes everything the manifest does not reference,
-                # so the orphan delta is zero by construction until the next
-                # reconciliation measures otherwise.
-                self._note_orphans_cleaned()
-                untracked_bytes = 0
-            except Exception as exc:
-                logger.warning(
-                    "SessionBank SSD orphan cleanup failed during cap check: %s: %s",
-                    type(exc).__name__,
-                    exc,
-                )
+        if untracked_bytes > 0 and self._orphan_cleanup_is_running():
+            untracked_bytes = max(0, untracked_bytes - self._reclaimable_bytes_estimate())
         return manifest_bytes + untracked_bytes
 
     def _untracked_bytes_estimate(self) -> int:
+        """Managed bytes the manifest does not account for (orphans included)."""
         with self._disk_usage_lock:
             cached = self._disk_usage_cache
             if cached is None:
@@ -1679,15 +1809,45 @@ class SessionBankColdTier:
             manifest_at_scan = int(cached.get("manifest_physical_bytes_at_scan", 0) or 0)
         return max(0, managed_file_bytes - database_file_bytes - manifest_at_scan)
 
-    def _note_orphans_cleaned(self) -> None:
+    def _reclaimable_bytes_estimate(self) -> int:
+        """Bytes the last walk classified as garbage a cleanup would delete."""
         with self._disk_usage_lock:
             cached = self._disk_usage_cache
             if cached is None:
-                return
-            managed_file_bytes = int(cached.get("managed_file_bytes", 0) or 0)
-            database_file_bytes = int(cached.get("database_file_bytes", 0) or 0)
-            cached["manifest_physical_bytes_at_scan"] = max(
-                0, managed_file_bytes - database_file_bytes
+                return 0
+            return int(cached.get("orphan_file_bytes", 0) or 0)
+
+    def _reclaim_orphans_if_over_cap(self, required_bytes: int, *, inline: bool) -> None:
+        """Reclaim garbage before a write is priced against the cap (#493).
+
+        ``inline`` runs the pass on the calling thread (the writer thread:
+        the walk yields to foreground traffic and only delays durability);
+        ``inline=False`` schedules it in the background (the owner thread
+        must never walk). The cap here is the effective write budget, so a
+        filling disk reclaims earlier than the configured cap alone would.
+        """
+        if not self.enabled:
+            return
+        reclaimable = self._reclaimable_bytes_estimate()
+        if reclaimable <= 0 or self._orphan_cleanup_is_running():
+            return
+        cap, budget_block = self._effective_write_budget()
+        if budget_block is not None:
+            cap = 0
+        current = self._current_bytes() + self._untracked_bytes_estimate()
+        if current + max(0, int(required_bytes)) <= cap:
+            return
+        if not inline:
+            self._start_orphan_cleanup()
+            return
+        result = self._run_orphan_cleanup()
+        if result is not None:
+            logger.info(
+                "SessionBank SSD store over its cap: reclaimed %d orphan files "
+                "(%.2f GB) in %.1f s before admitting a write",
+                int(result["files_deleted"]),
+                float(result["disk_bytes_deleted"]) / 1e9,
+                float(result["elapsed_s"]),
             )
 
     def _delete_entry_row(self, row: sqlite3.Row) -> None:
@@ -1731,32 +1891,10 @@ class SessionBankColdTier:
         self._invalidate_disk_usage_cache()
 
     def _entry_blob_hashes(self, entry_dir: Path) -> set[str]:
-        payload_path = entry_dir / "payload.json"
-        if not payload_path.exists():
-            return set()
-        try:
-            payload = json.loads(payload_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return set()
-        tensor_blobs = payload.get("tensor_blobs") or {}
-        blob_hashes: set[str] = set()
-        if isinstance(tensor_blobs, dict):
-            for blob in tensor_blobs.values():
-                if not isinstance(blob, dict):
-                    continue
-                digest = blob.get("sha256")
-                if digest:
-                    blob_hashes.add(str(digest))
-        return blob_hashes
+        return _entry_blob_hashes_of(entry_dir)
 
     def _manifest_blob_hashes(self) -> set[str]:
-        with self._connect() as conn:
-            rows = list(conn.execute("SELECT entry_dir FROM entries").fetchall())
-        blob_hashes: set[str] = set()
-        for row in rows:
-            entry_dir = self.base_dir / str(row["entry_dir"])
-            blob_hashes.update(self._entry_blob_hashes(entry_dir))
-        return blob_hashes
+        return _manifest_blob_hashes_of(self.base_dir)
 
     def _delete_unreferenced_blobs(self, candidate_hashes: set[str]) -> None:
         if not candidate_hashes:
@@ -1784,21 +1922,55 @@ class SessionBankColdTier:
         with self._disk_usage_lock:
             return bool(self._orphan_cleanup_running)
 
-    def _start_orphan_cleanup(self) -> None:
+    def _claim_orphan_cleanup(self) -> bool:
+        """Take the single cleanup slot; False when a pass already runs.
+
+        The slot also holds the disk-usage scan slot while it can: the pass
+        installs the snapshot it produces, so no measurement walk needs to
+        start beside it (one already running keeps its own flag).
+        """
         with self._disk_usage_lock:
             if self._orphan_cleanup_running:
-                return
+                return False
             self._orphan_cleanup_running = True
+            self._cleanup_holds_scan_slot = not self._disk_usage_scan_running
+            self._disk_usage_scan_running = True
+            return True
+
+    def _release_orphan_cleanup(self) -> None:
+        with self._disk_usage_lock:
+            self._orphan_cleanup_running = False
+            if self._cleanup_holds_scan_slot:
+                self._disk_usage_scan_running = False
+            self._cleanup_holds_scan_slot = False
+
+    def _start_orphan_cleanup(self, *, at_start: bool = False) -> None:
+        if not self._claim_orphan_cleanup():
+            return
         threading.Thread(
             target=self._orphan_cleanup_worker,
+            kwargs={"at_start": at_start},
             name="mtplx-sessionbank-orphan-cleanup",
             daemon=True,
         ).start()
 
-    def _orphan_cleanup_worker(self) -> None:
+    def _run_orphan_cleanup(self) -> dict[str, int | float] | None:
+        """One reconciliation pass on the calling thread, or None if one runs."""
+        if not self._claim_orphan_cleanup():
+            return None
         try:
             result = self._cleanup_untracked_cache_once()
             self._record_orphan_cleanup_result(result)
+            return result
+        finally:
+            self._release_orphan_cleanup()
+
+    def _orphan_cleanup_worker(self, *, at_start: bool = False) -> None:
+        try:
+            result = self._cleanup_untracked_cache_once()
+            self._record_orphan_cleanup_result(result)
+            if at_start:
+                self._log_startup_reconcile(result)
         except Exception as exc:  # pragma: no cover - defensive background task
             logger.warning(
                 "SessionBank SSD orphan cleanup failed: %s: %s",
@@ -1806,9 +1978,53 @@ class SessionBankColdTier:
                 exc,
             )
         finally:
-            self._invalidate_disk_usage_cache()
-            with self._disk_usage_lock:
-                self._orphan_cleanup_running = False
+            self._release_orphan_cleanup()
+
+    def _log_startup_reconcile(self, result: dict[str, int | float]) -> None:
+        with self._disk_usage_lock:
+            cached = dict(self._disk_usage_cache or {})
+        summary: dict[str, Any] = {
+            "dir": str(self.base_dir),
+            "files_deleted": int(result["files_deleted"]),
+            "dirs_deleted": int(result["dirs_deleted"]),
+            "disk_bytes_deleted": int(result["disk_bytes_deleted"]),
+            "elapsed_s": round(float(result["elapsed_s"]), 3),
+            "entries": int(cached.get("manifest_entries_at_scan", 0) or 0),
+            "disk_bytes": int(cached.get("managed_disk_bytes", 0) or 0),
+            "max_bytes": int(self.max_bytes),
+            "interrupted": bool(cached.get("disk_usage_stale", False)) and self._stop.is_set(),
+        }
+        if summary["files_deleted"] or summary["dirs_deleted"]:
+            logger.info(
+                "SessionBank SSD store reconciled at start: reclaimed %d orphan "
+                "files (%.2f GB) in %.1f s; %d entries, %.2f GB on disk, cap %.2f GB",
+                summary["files_deleted"],
+                summary["disk_bytes_deleted"] / 1e9,
+                summary["elapsed_s"],
+                summary["entries"],
+                summary["disk_bytes"] / 1e9,
+                summary["max_bytes"] / 1e9,
+            )
+        else:
+            logger.info(
+                "SessionBank SSD store reconciled at start: nothing to reclaim "
+                "(%d entries, %.2f GB on disk, %.1f s)",
+                summary["entries"],
+                summary["disk_bytes"] / 1e9,
+                summary["elapsed_s"],
+            )
+        with self._stats_lock:
+            self._stats["startup_reconcile"] = dict(summary)
+        listener = self.reconcile_listener
+        if listener is not None:
+            try:
+                listener(summary)
+            except Exception as exc:  # pragma: no cover - listener is observability
+                logger.warning(
+                    "SessionBank SSD reconcile listener failed: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
 
     def _record_orphan_cleanup_result(self, result: dict[str, int | float]) -> None:
         with self._stats_lock:
@@ -1827,121 +2043,52 @@ class SessionBankColdTier:
             self._stats["orphan_cleanup_last_s"] = float(result["elapsed_s"])
 
     def _cleanup_untracked_cache_once(self) -> dict[str, int | float]:
-        started = time.perf_counter()
-        files_deleted = 0
-        dirs_deleted = 0
-        disk_bytes_deleted = 0
-        with self._base_lock:
-            manifest_entry_dirs = self._manifest_entry_dirs()
-            manifest_blob_hashes = self._manifest_blob_hashes()
+        """One delete-mode reconciliation pass; installs the census it took.
 
-            for root in (self.base_dir / "evicted_entries",):
-                removed = self._remove_tree_counting(root)
-                files_deleted += int(removed["files_deleted"])
-                dirs_deleted += int(removed["dirs_deleted"])
-                disk_bytes_deleted += int(removed["disk_bytes_deleted"])
-
-            entries_root = self.base_dir / "entries"
-            if entries_root.exists():
-                for prefix_dir in list(entries_root.iterdir()):
-                    if not prefix_dir.is_dir():
-                        continue
-                    for entry_dir in list(prefix_dir.iterdir()):
-                        if not entry_dir.is_dir():
-                            continue
-                        try:
-                            rel = str(entry_dir.relative_to(self.base_dir))
-                        except ValueError:
-                            continue
-                        if rel in manifest_entry_dirs:
-                            continue
-                        removed = self._remove_tree_counting(entry_dir)
-                        files_deleted += int(removed["files_deleted"])
-                        dirs_deleted += int(removed["dirs_deleted"])
-                        disk_bytes_deleted += int(removed["disk_bytes_deleted"])
-                    self._prune_empty_parents(prefix_dir, stop_at=entries_root)
-
-            blobs_root = self.base_dir / "blobs"
-            if blobs_root.exists():
-                for prefix_dir in list(blobs_root.iterdir()):
-                    if not prefix_dir.is_dir():
-                        continue
-                    for path in list(prefix_dir.glob("*.bin")):
-                        digest = path.stem
-                        if digest in manifest_blob_hashes:
-                            continue
-                        try:
-                            disk_bytes_deleted += self._allocated_bytes(path)
-                            path.unlink()
-                            files_deleted += 1
-                        except FileNotFoundError:
-                            continue
-                        except OSError as exc:
-                            logger.warning(
-                                "SessionBank SSD orphan blob cleanup failed path=%s: %s: %s",
-                                path,
-                                type(exc).__name__,
-                                exc,
-                            )
-                    self._prune_empty_parents(prefix_dir, stop_at=blobs_root)
-        self._invalidate_disk_usage_cache()
+        The walk is :func:`reconcile_store` with this tier's coordination:
+        deletions per directory batch under ``_base_lock``, writes in flight
+        protected, the manifest re-read whenever the store generation moved,
+        foreground yields at the blob-write cadence, early stop on close().
+        The pass's own deletions do not bump the store generation (nothing
+        the manifest names changed), so its post-pass totals install as the
+        exact snapshot unless a concurrent commit tore the walk.
+        """
+        usage = self._walk_and_install(
+            lambda: self._usage_from_report(self._reconcile_walk(dry_run=False))
+        )
         return {
-            "files_deleted": int(files_deleted),
-            "dirs_deleted": int(dirs_deleted),
-            "disk_bytes_deleted": int(disk_bytes_deleted),
-            "elapsed_s": float(time.perf_counter() - started),
+            "files_deleted": int(usage.get("files_deleted", 0) or 0),
+            "dirs_deleted": int(usage.get("dirs_deleted", 0) or 0),
+            "disk_bytes_deleted": int(usage.get("disk_bytes_deleted", 0) or 0),
+            "elapsed_s": float(usage.get("elapsed_s", 0.0) or 0.0),
         }
+
+    def _reconcile_walk(self, *, dry_run: bool) -> ReconcileReport:
+        return reconcile_store(
+            self.base_dir,
+            dry_run=dry_run,
+            lock=None if dry_run else self._base_lock,
+            protected=self._inflight_snapshot,
+            manifest_generation=self._generation_now,
+            on_yield=self._pause_for_foreground,
+            should_stop=self._stop.is_set,
+            yield_every=DISK_USAGE_SCAN_YIELD_EVERY_FILES,
+        )
+
+    def _inflight_snapshot(self) -> tuple[set[str], set[str]]:
+        # Called under _base_lock by the reconciliation pass.
+        return set(self._inflight_entry_dirs), set(self._inflight_blob_hashes)
+
+    def _generation_now(self) -> int:
+        with self._disk_usage_lock:
+            return int(self._store_generation)
 
     def _manifest_entry_dirs(self) -> set[str]:
-        with self._connect() as conn:
-            rows = list(conn.execute("SELECT entry_dir FROM entries").fetchall())
-        return {str(row["entry_dir"]) for row in rows}
-
-    @staticmethod
-    def _remove_tree_counting(path: Path) -> dict[str, int]:
-        if not path.exists():
-            return {"files_deleted": 0, "dirs_deleted": 0, "disk_bytes_deleted": 0}
-        files_deleted = 0
-        dirs_deleted = 0
-        disk_bytes_deleted = 0
-        for root, dirs, files in os.walk(path):
-            dirs_deleted += len(dirs)
-            for filename in files:
-                file_path = Path(root) / filename
-                try:
-                    disk_bytes_deleted += SessionBankColdTier._allocated_bytes(file_path)
-                    files_deleted += 1
-                except FileNotFoundError:
-                    continue
-        try:
-            shutil.rmtree(path)
-            dirs_deleted += 1
-        except FileNotFoundError:
-            pass
-        return {
-            "files_deleted": int(files_deleted),
-            "dirs_deleted": int(dirs_deleted),
-            "disk_bytes_deleted": int(disk_bytes_deleted),
-        }
-
-    @staticmethod
-    def _allocated_bytes(path: Path) -> int:
-        stat = path.stat()
-        blocks = int(getattr(stat, "st_blocks", 0) or 0)
-        return blocks * 512 if blocks > 0 else int(stat.st_size)
+        return _manifest_entry_dirs_of(self.base_dir)
 
     @staticmethod
     def _prune_empty_parents(path: Path, *, stop_at: Path) -> None:
-        current = path
-        stop = stop_at.resolve()
-        while True:
-            try:
-                if current.resolve() == stop:
-                    return
-                current.rmdir()
-            except (FileNotFoundError, OSError):
-                return
-            current = current.parent
+        _prune_empty_parents_of(path, stop_at=stop_at)
 
     def _restore_row(
         self,
@@ -2369,6 +2516,33 @@ class SessionBankColdTier:
                 self._disk_usage_scan_running = False
 
     def _refresh_disk_usage_now(self) -> dict[str, int | float]:
+        return self._walk_and_install(self._scan_managed_disk_usage)
+
+    # Keys a walk contributes to the installed snapshot. A delete-mode pass
+    # also reports what it removed; those figures are returned to the caller
+    # but never installed (stats() would otherwise show them as store state).
+    _SNAPSHOT_KEYS = frozenset(
+        {
+            "managed_file_bytes",
+            "managed_disk_bytes",
+            "database_file_bytes",
+            "database_disk_bytes",
+            "managed_file_count",
+            "managed_dir_count",
+            "manifest_entries_at_scan",
+            "orphan_file_bytes",
+            "orphan_disk_bytes",
+            "orphan_file_count",
+            "disk_usage_scan_s",
+            "disk_usage_last_scan_s",
+            "disk_usage_scan_pending",
+            "disk_usage_stale",
+        }
+    )
+
+    def _walk_and_install(
+        self, walk: Callable[[], dict[str, int | float]]
+    ) -> dict[str, int | float]:
         # The walk runs without _base_lock so a 40 s reconciliation of a large
         # bank never stalls the writer or blocks archive/cleanup. Coherence
         # comes from the store generation instead: the walk records the
@@ -2381,8 +2555,8 @@ class SessionBankColdTier:
         with self._disk_usage_lock:
             generation = self._store_generation
         manifest_before = self._current_bytes()
-        usage = self._scan_managed_disk_usage()
-        if self._stop.is_set():
+        usage = walk()
+        if self._stop.is_set() or bool(usage.get("disk_usage_interrupted")):
             # Interrupted by close(): a partial walk is not a snapshot.
             usage["disk_usage_stale"] = True
             return usage
@@ -2392,7 +2566,12 @@ class SessionBankColdTier:
             usage["manifest_physical_bytes_at_scan"] = max(manifest_before, manifest_after)
             usage["disk_usage_generation"] = int(generation)
             usage["disk_usage_stale"] = bool(torn)
-            self._disk_usage_cache = dict(usage)
+            self._disk_usage_cache = {
+                key: value
+                for key, value in usage.items()
+                if key in self._SNAPSHOT_KEYS
+                or key in ("manifest_physical_bytes_at_scan", "disk_usage_generation")
+            }
         return dict(usage)
 
     @staticmethod
@@ -2403,8 +2582,12 @@ class SessionBankColdTier:
             "database_file_bytes": 0,
             "database_disk_bytes": 0,
             "manifest_physical_bytes_at_scan": 0,
+            "manifest_entries_at_scan": 0,
             "managed_file_count": 0,
             "managed_dir_count": 0,
+            "orphan_file_bytes": 0,
+            "orphan_disk_bytes": 0,
+            "orphan_file_count": 0,
             "disk_usage_scan_s": 0.0,
             "disk_usage_last_scan_s": 0.0,
             "disk_usage_generation": -1,
@@ -2413,51 +2596,38 @@ class SessionBankColdTier:
         }
 
     def _scan_managed_disk_usage(self) -> dict[str, int | float]:
-        now = time.time()
-        started = time.perf_counter()
-        file_bytes = 0
-        disk_bytes = 0
-        database_file_bytes = 0
-        database_disk_bytes = 0
-        file_count = 0
-        dir_count = 0
-        for root, dirs, files in os.walk(self.base_dir):
-            dir_count += len(dirs)
-            for filename in files:
-                path = Path(root) / filename
-                try:
-                    stat = path.stat()
-                except FileNotFoundError:
-                    continue
-                file_count += 1
-                if file_count % DISK_USAGE_SCAN_YIELD_EVERY_FILES == 0:
-                    # Reconciliation is maintenance: give way to live traffic
-                    # (bounded pause, same policy as blob writes) and stop
-                    # early on close.
-                    self._pause_for_foreground()
-                    if self._stop.is_set():
-                        break
-                file_bytes += int(stat.st_size)
-                blocks = int(getattr(stat, "st_blocks", 0) or 0)
-                allocated = blocks * 512 if blocks > 0 else int(stat.st_size)
-                disk_bytes += allocated
-                if filename.startswith("manifest.sqlite"):
-                    database_file_bytes += int(stat.st_size)
-                    database_disk_bytes += int(allocated)
-            if self._stop.is_set():
-                break
+        """The measurement walk: the reconciliation in dry-run mode."""
+        return self._usage_from_report(self._reconcile_walk(dry_run=True))
+
+    @staticmethod
+    def _usage_from_report(report: ReconcileReport) -> dict[str, int | float]:
         usage: dict[str, int | float] = {
-            "managed_file_bytes": int(file_bytes),
-            "managed_disk_bytes": int(disk_bytes),
-            "database_file_bytes": int(database_file_bytes),
-            "database_disk_bytes": int(database_disk_bytes),
-            "managed_file_count": int(file_count),
-            "managed_dir_count": int(dir_count),
-            "disk_usage_scan_s": float(time.perf_counter() - started),
-            "disk_usage_last_scan_s": float(now),
+            "managed_file_bytes": int(report.file_bytes),
+            "managed_disk_bytes": int(report.disk_bytes),
+            "database_file_bytes": int(report.database_file_bytes),
+            "database_disk_bytes": int(report.database_disk_bytes),
+            "managed_file_count": int(report.file_count),
+            "managed_dir_count": int(report.dir_count),
+            "manifest_entries_at_scan": int(report.entries),
+            "orphan_file_bytes": int(report.orphan_file_bytes),
+            "orphan_disk_bytes": int(report.orphan_disk_bytes),
+            "orphan_file_count": int(report.orphan_file_count),
+            "disk_usage_scan_s": float(report.elapsed_s),
+            "disk_usage_last_scan_s": float(time.time()),
             "disk_usage_scan_pending": False,
-            "disk_usage_stale": False,
+            "disk_usage_stale": bool(report.interrupted),
+            "disk_usage_interrupted": bool(report.interrupted),
         }
+        if not report.dry_run:
+            # A delete-mode pass leaves no reclaimable garbage behind (what it
+            # kept was claimed by the manifest or a write in flight).
+            usage["orphan_file_bytes"] = 0
+            usage["orphan_disk_bytes"] = 0
+            usage["orphan_file_count"] = 0
+            usage["files_deleted"] = int(report.files_deleted)
+            usage["dirs_deleted"] = int(report.dirs_deleted)
+            usage["disk_bytes_deleted"] = int(report.disk_bytes_deleted)
+            usage["elapsed_s"] = float(report.elapsed_s)
         return usage
 
     def _invalidate_disk_usage_cache(self) -> None:
