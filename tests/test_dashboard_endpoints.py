@@ -14,6 +14,7 @@ actually builds. They cover:
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from threading import Event, Thread
@@ -1131,3 +1132,68 @@ def test_a_producer_supplied_wall_clock_is_kept():
         state, {"request_id": "r1", "completed_at_s": 1234.5}
     )
     assert state.last_metrics[-1]["completed_at_s"] == 1234.5
+
+
+def test_metrics_endpoint_rows_carry_the_wall_clock_and_the_draft_totals():
+    """Wire contract for the request log (issue #401): the dashboard reads
+    `recent` rows from GET /metrics, so the row served there, not only the
+    envelope helper, has to carry `completed_at_s` and the draft totals."""
+    state = _fake_state()
+    state.last_metrics = []
+    before = time.time()
+    openai._record_request_metrics(
+        state,
+        _request_envelope(
+            {
+                "verify_calls": 12,
+                "accepted_drafts": 27,
+                "rejected_drafts": 9,
+                "drafted_tokens": 36,
+                "accepted_by_depth": [12, 9, 6],
+                "drafted_by_depth": [12, 12, 12],
+            }
+        ),
+    )
+    after = time.time()
+
+    payload = TestClient(create_app(state)).get("/metrics").json()
+    row = payload["recent"][-1]
+    assert before <= row["completed_at_s"] <= after
+    assert row["accepted_drafts"] == 27
+    assert row["drafted_tokens"] == 36
+    assert payload["latest"]["completed_at_s"] == row["completed_at_s"]
+
+
+# ---- strict JSON on the SSE stream (found while checking issue #481) -------
+
+
+def test_json_safe_turns_non_finite_floats_into_null():
+    """JSON has no inf or nan. FastAPI's encoder already turns them into
+    null on the routes; `_json_safe` feeds the SSE stream and the request
+    log, which serialize with json.dumps directly, so it has to do the same
+    or a browser's JSON.parse rejects the whole event."""
+    assert openai._json_safe(float("inf")) is None
+    assert openai._json_safe(float("-inf")) is None
+    assert openai._json_safe(float("nan")) is None
+    assert openai._json_safe(1.5) == 1.5
+    assert openai._json_safe(0) == 0
+    assert openai._json_safe(True) is True
+    assert openai._json_safe({"a": [float("inf"), 2.0]}) == {"a": [None, 2.0]}
+
+
+def test_dashboard_stream_snapshot_is_strict_json_with_the_idle_sweep_off(monkeypatch):
+    """MTPLX_SESSION_BANK_IDLE_TTL_S=0 (issue #481, "keep entries until
+    memory needs them") makes the bank's idle_ttl_s infinite. /health already
+    rendered that as null; the dashboard stream serialized the same snapshot
+    with a bare `Infinity` token, which JSON.parse in the browser rejects, so
+    every snapshot event on the live dashboard was unparseable."""
+    monkeypatch.setenv("MTPLX_SESSION_BANK_IDLE_TTL_S", "0")
+    state = _fake_state()
+    state.sessions = openai.EngineSessionManager()
+    assert state.sessions.bank.idle_ttl_s == float("inf")
+
+    snapshot = openai._mtplx_dashboard_snapshot(state)
+    # Exactly what the SSE handler writes after "data: "; allow_nan=False is
+    # the strict-JSON check a browser applies.
+    wire = json.dumps(openai._json_safe(snapshot), allow_nan=False)
+    assert json.loads(wire)["session_bank"]["idle_ttl_s"] is None
