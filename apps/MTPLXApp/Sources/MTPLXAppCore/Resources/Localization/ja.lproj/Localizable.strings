@@ -584,7 +584,7 @@
 "Forge isn't available" = "Forgeを利用できません";
 "Forge only publishes models that proved an MTP speed win on this Mac." = "ForgeはこのMacでMTPによる速度向上が実証されたモデルのみを公開します。";
 "Forge will register the model only after the verified MTPLX runtime metadata is available." = "Forgeは検証済みのMTPLXランタイムメタデータが利用可能になった後にのみモデルを登録します。";
-"Forge will save ~/Documents/MTPLX/models/%@/" = "Forgeは~/Documents/MTPLX/models/%@/に保存します";
+"Forge will save %@/" = "Forgeは%@/に保存します";
 "Forged" = "Forged";
 "Forged %@" = "Forged %@";
 "Forged locally with MTPLX Forge." = "MTPLX Forgeでローカルにビルド済み。";
@@ -1579,3 +1579,15 @@
 "Ready. Open the dashboard to save this setup." = "準備完了。ダッシュボードを開いて、この設定を保存してください。";
 "Retry verify" = "検証を再試行";
 "Use it now" = "今すぐ使用";
+"Model libraries" = "モデルライブラリ";
+"Downloads and Forge write to the primary folder. Additional folders are searched in order." = "ダウンロードとForgeはプライマリフォルダに書き込みます。追加フォルダは順番に検索されます。";
+"Primary" = "プライマリ";
+"Additional %lld" = "追加 %lld";
+"Choose" = "選択";
+"Available" = "利用可能";
+"Unavailable" = "利用不可";
+"Add folder" = "フォルダを追加";
+"Add" = "追加";
+"Choose one or more model folders to search." = "検索するモデルフォルダを1つ以上選択してください。";
+"Choose the folder for downloads and Forge output." = "ダウンロードとForgeの出力先フォルダを選択してください。";
+"Local MTPLX model in a configured library." = "設定済みライブラリ内のローカルMTPLXモデル。";

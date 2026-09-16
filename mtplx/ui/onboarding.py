@@ -17,7 +17,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from mtplx.constants import (
     EXPECTED_ALL_PREQUANTIZED_MTP_KEYS,
@@ -891,13 +891,19 @@ def _print_summary(
 _MAX_INSTALLED_PICKER_ROWS = 6
 
 
-def _installed_models_for_screen() -> list[Any]:
+def _installed_models_for_screen(
+    *,
+    cache_dir: str | Path | None = None,
+    search_dirs: Iterable[str | Path] | None = None,
+) -> list[Any]:
     """Complete installs from the local cache for the 'On this Mac' group."""
 
     try:
         from mtplx.model_catalog import scan_installed_models
 
-        return list(scan_installed_models())[:_MAX_INSTALLED_PICKER_ROWS]
+        return list(
+            scan_installed_models(cache_dir, search_dirs=search_dirs)
+        )[:_MAX_INSTALLED_PICKER_ROWS]
     except Exception:
         return []
 
@@ -1440,6 +1446,8 @@ def screen_server_surface(
 def run_onboarding_screens(
     *,
     configured_model: str | None = None,
+    cache_dir: str | Path | None = None,
+    search_dirs: Iterable[str | Path] | None = None,
     open_dashboard_override: bool | None = None,
     host: str = "127.0.0.1",
     port: int = 8000,
@@ -1458,7 +1466,10 @@ def run_onboarding_screens(
 
     model = screen_model(
         configured=configured_model,
-        installed=_installed_models_for_screen(),
+        installed=_installed_models_for_screen(
+            cache_dir=cache_dir,
+            search_dirs=search_dirs,
+        ),
         app_model=_app_settings_model(),
     )
     profile, max_mode = screen_mode()
@@ -1494,6 +1505,8 @@ def run_onboarding_screens(
 def run_serve_onboarding_screens(
     *,
     configured_model: str | None = None,
+    cache_dir: str | Path | None = None,
+    search_dirs: Iterable[str | Path] | None = None,
     host: str = "127.0.0.1",
     port: int = 8000,
     default_open_browser: bool = False,
@@ -1502,7 +1515,10 @@ def run_serve_onboarding_screens(
 
     model = screen_model(
         configured=configured_model,
-        installed=_installed_models_for_screen(),
+        installed=_installed_models_for_screen(
+            cache_dir=cache_dir,
+            search_dirs=search_dirs,
+        ),
         app_model=_app_settings_model(),
     )
     profile, max_mode = screen_mode()
@@ -1944,6 +1960,8 @@ def run_quickstart_flow(
     *,
     fresh: bool = False,
     configured_model: str | None = None,
+    cache_dir: str | Path | None = None,
+    search_dirs: Iterable[str | Path] | None = None,
     open_dashboard_override: bool | None = None,
     host: str = "127.0.0.1",
     port: int = 8000,
@@ -2026,6 +2044,8 @@ def run_quickstart_flow(
             _print_welcome()
         choice = run_onboarding_screens(
             configured_model=configured_model,
+            cache_dir=cache_dir,
+            search_dirs=search_dirs,
             open_dashboard_override=open_dashboard_override,
             host=host,
             port=port,
@@ -2082,6 +2102,8 @@ def run_serve_flow(
     *,
     fresh: bool = False,
     configured_model: str | None = None,
+    cache_dir: str | Path | None = None,
+    search_dirs: Iterable[str | Path] | None = None,
     host: str = "127.0.0.1",
     port: int = 8000,
     default_open_browser: bool = False,
@@ -2099,6 +2121,8 @@ def run_serve_flow(
         _print_server_welcome()
         choice = run_serve_onboarding_screens(
             configured_model=configured_model,
+            cache_dir=cache_dir,
+            search_dirs=search_dirs,
             host=host,
             port=port,
             default_open_browser=default_open_browser,

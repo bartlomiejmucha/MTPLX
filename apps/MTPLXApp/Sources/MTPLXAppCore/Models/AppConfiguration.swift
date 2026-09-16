@@ -338,6 +338,11 @@ public struct MTPLXAppConfiguration: Codable, Equatable, Sendable {
     /// picker. Official models stay in `MTPLXModelOption.officialCatalog`;
     /// this array is only the user's personal additions.
     public var customModels: [MTPLXModelOption]
+    /// The only model-library root that receives downloads and Forge output.
+    public var primaryModelDirectory: String
+    /// Ordered read-only discovery roots. Missing volumes remain configured so
+    /// they become available again when the user reconnects them.
+    public var additionalModelDirectories: [String]
     /// User's Hugging Face handle, captured the first time they
     /// publish a forged model so subsequent Publish flows can pre-fill
     /// the `<handle>/<branded-name>` repo field. Persisted only when
@@ -426,6 +431,8 @@ public struct MTPLXAppConfiguration: Codable, Equatable, Sendable {
         tunedControlRecord: TunedControlRecord? = nil,
         tunedControlRecordsByModel: [String: TunedControlRecord] = [:],
         customModels: [MTPLXModelOption] = [],
+        primaryModelDirectory: String = ModelLibrary.defaultPrimaryDirectory().path,
+        additionalModelDirectories: [String] = [],
         huggingFaceHandle: String? = nil,
         hfEndpoint: String? = nil,
         memoryLimitGB: Int? = nil,
@@ -502,6 +509,12 @@ public struct MTPLXAppConfiguration: Codable, Equatable, Sendable {
         self.tunedControlRecord = tunedControlRecord
         self.tunedControlRecordsByModel = tunedControlRecordsByModel
         self.customModels = customModels
+        let modelLibrary = ModelLibrary(
+            primaryDirectory: primaryModelDirectory,
+            additionalDirectories: additionalModelDirectories
+        )
+        self.primaryModelDirectory = modelLibrary.primaryDirectory.path
+        self.additionalModelDirectories = modelLibrary.additionalDirectories.map(\.path)
         self.huggingFaceHandle = huggingFaceHandle
         self.hfEndpoint = hfEndpoint
         self.memoryLimitGB = Self.normalizedMemoryLimitGB(memoryLimitGB)
@@ -541,6 +554,39 @@ public struct MTPLXAppConfiguration: Codable, Equatable, Sendable {
             return defaultHermesWorkspacePath()
         }
         return (trimmed as NSString).expandingTildeInPath
+    }
+
+    public var modelLibrary: ModelLibrary {
+        ModelLibrary(
+            primaryDirectory: primaryModelDirectory,
+            additionalDirectories: additionalModelDirectories
+        )
+    }
+
+    public mutating func normalizeModelDirectories() {
+        let normalized = modelLibrary
+        primaryModelDirectory = normalized.primaryDirectory.path
+        additionalModelDirectories = normalized.additionalDirectories.map(\.path)
+    }
+
+    /// Moves the write root without hiding the previous library. The old
+    /// primary becomes the first additional root unless it resolves to the
+    /// same physical directory as the new primary.
+    public mutating func setPrimaryModelDirectory(
+        _ path: String,
+        preservePrevious: Bool = true
+    ) {
+        let previous = primaryModelDirectory
+        primaryModelDirectory = path
+        if preservePrevious {
+            additionalModelDirectories.insert(previous, at: 0)
+        }
+        normalizeModelDirectories()
+    }
+
+    public mutating func addModelDirectories(_ paths: [String]) {
+        additionalModelDirectories.append(contentsOf: paths)
+        normalizeModelDirectories()
     }
 
     public mutating func rememberCustomModel(repoID: String) {
@@ -728,6 +774,8 @@ public struct MTPLXAppConfiguration: Codable, Equatable, Sendable {
         case tunedControlRecord = "tuned_control_record"
         case tunedControlRecordsByModel = "tuned_control_records_by_model"
         case customModels = "custom_models"
+        case primaryModelDirectory = "primary_model_directory"
+        case additionalModelDirectories = "additional_model_directories"
         case huggingFaceHandle = "hugging_face_handle"
         case hfEndpoint = "hf_endpoint"
         case memoryLimitGB = "memory_limit_gb"
@@ -849,6 +897,10 @@ public struct MTPLXAppConfiguration: Codable, Equatable, Sendable {
         hfEndpoint = field(String.self, .hfEndpoint)
         memoryLimitGB = Self.normalizedMemoryLimitGB(field(Int.self, .memoryLimitGB))
         allowSwap = field(Bool.self, .allowSwap) ?? defaults.allowSwap
+        primaryModelDirectory = field(String.self, .primaryModelDirectory) ?? defaults.primaryModelDirectory
+        additionalModelDirectories = container.lenientDecodeArrayIfPresent(
+            of: String.self, forKey: .additionalModelDirectories, issues: issues
+        ) ?? defaults.additionalModelDirectories
         sanitizeLaunchCriticalFields()
     }
 
@@ -974,6 +1026,7 @@ public struct MTPLXAppConfiguration: Codable, Equatable, Sendable {
     /// ("auto", "sustained-max"). "sustained-max" meant sustained plus
     /// pinned fans, so the fan intent survives the profile rewrite.
     public mutating func sanitizeLaunchCriticalFields() {
+        normalizeModelDirectories()
         let profileValue = profile.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if profileValue == "sustained-max" || profileValue == "sustained_max" {
             fanMode = MTPLXFanMode.max.rawValue

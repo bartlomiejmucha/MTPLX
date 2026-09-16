@@ -88,6 +88,7 @@ public final class ForgeOrchestrator: ObservableObject {
     private let hfPublisher: HFPublisher
     private let hfTokenStore: HFTokenStore
     private let feasibility: ModelFeasibility
+    private var modelLibrary: ModelLibrary = .default
 
     // MARK: Task handles (cancel surface)
 
@@ -165,12 +166,14 @@ public final class ForgeOrchestrator: ObservableObject {
         }
     }
 
-    public func evaluateFeasibility() -> ModelFeasibilityVerdict? {
+    public func evaluateFeasibility(
+        modelLibrary: ModelLibrary? = nil
+    ) -> ModelFeasibilityVerdict? {
         guard let probe = state.sourceProbe, probe.verdict == .forgeable else { return nil }
         let hw = state.hardware
         let chipTier = hw?.tier ?? .unknown
         let ramGiB = hw?.unifiedMemoryGiB ?? 0
-        let diskFreeGiB = freeDiskGiB()
+        let diskFreeGiB = freeDiskGiB(modelLibrary: modelLibrary)
         // Use the probe's estimates if available, otherwise fall
         // back to a generous default that won't false-positive on
         // small models.
@@ -196,9 +199,9 @@ public final class ForgeOrchestrator: ObservableObject {
         )
     }
 
-    public func freeDiskGiB() -> Double {
-        // The model store's own volume, not the home volume (#466).
-        ModelStoreVolume.freeGiB()
+    public func freeDiskGiB(modelLibrary: ModelLibrary? = nil) -> Double {
+        let library = modelLibrary ?? self.modelLibrary
+        return ModelStoreVolume.freeGiB(at: ModelStoreVolume.measurementURL(for: library.primaryDirectory))
     }
 
     // MARK: - Plan step
@@ -213,10 +216,13 @@ public final class ForgeOrchestrator: ObservableObject {
 
     // MARK: - Build (drives convert + calibrate + verify + brand)
 
-    public func startBuild() {
+    public func startBuild(modelLibrary: ModelLibrary? = nil) {
         guard !isBuilding else { return }
         guard let probe = state.sourceProbe, probe.verdict == .forgeable else { return }
         guard !(state.recipe.degradesMtp && !state.hasAcknowledgedDegradedMTP) else { return }
+        if let modelLibrary {
+            self.modelLibrary = modelLibrary
+        }
 
         // Reset per-build live signals before launching.
         convertPhases = [:]
@@ -257,7 +263,8 @@ public final class ForgeOrchestrator: ObservableObject {
             outputDir: outputDir.path,
             runID: String(runID),
             maxFans: true,
-            allowDegradedMtp: state.recipe.degradesMtp
+            allowDegradedMtp: state.recipe.degradesMtp,
+            modelDirectory: self.modelLibrary.primaryDirectory.path
         )
 
         let builder = forgeBuilder

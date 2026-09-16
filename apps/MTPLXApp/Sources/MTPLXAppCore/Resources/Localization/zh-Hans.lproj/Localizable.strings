@@ -584,7 +584,7 @@
 "Forge isn't available" = "Forge 不可用";
 "Forge only publishes models that proved an MTP speed win on this Mac." = "Forge 仅发布已在这台 Mac 上证实具备 MTP 速度优势的模型。";
 "Forge will register the model only after the verified MTPLX runtime metadata is available." = "Forge 仅在已验证的 MTPLX 运行时元数据可用后才会注册该模型。";
-"Forge will save ~/Documents/MTPLX/models/%@/" = "Forge 将保存至 ~/Documents/MTPLX/models/%@/";
+"Forge will save %@/" = "Forge 将保存至 %@/";
 "Forged" = "已通过 Forge 构建";
 "Forged %@" = "已通过 Forge 构建 %@";
 "Forged locally with MTPLX Forge." = "已使用 MTPLX Forge 在本地构建。";
@@ -1579,3 +1579,15 @@
 "Ready. Open the dashboard to save this setup." = "已就绪。打开仪表盘以保存此设置。";
 "Retry verify" = "重试验证";
 "Use it now" = "立即使用";
+"Model libraries" = "模型库";
+"Downloads and Forge write to the primary folder. Additional folders are searched in order." = "下载和 Forge 会写入主文件夹。其他文件夹按顺序搜索。";
+"Primary" = "主文件夹";
+"Additional %lld" = "其他 %lld";
+"Choose" = "选择";
+"Available" = "可用";
+"Unavailable" = "不可用";
+"Add folder" = "添加文件夹";
+"Add" = "添加";
+"Choose one or more model folders to search." = "请选择一个或多个要搜索的模型文件夹。";
+"Choose the folder for downloads and Forge output." = "请选择用于下载和 Forge 输出的文件夹。";
+"Local MTPLX model in a configured library." = "已配置库中的本地 MTPLX 模型。";
