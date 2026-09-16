@@ -395,7 +395,6 @@ def test_flash_next_speed_lane_is_default_on_and_pack_gated(
     # the load-time children derived from their resolved parents.
     for key in (
         "MTPLX_QWEN4_OPDIET",
-        "MTPLX_QWEN4_BLOCK_VERIFY",
         "MTPLX_QWEN4_PLE_PREFILL_LOOKAHEAD",
         "MTPLX_QWEN4_PLE_FIRST_GATHER_EARLY",
         "MTPLX_SESSION_BANK_SHED_BOUNDARIES",
@@ -434,7 +433,10 @@ def test_flash_next_speed_lane_is_default_on_and_pack_gated(
     ):
         assert key not in overrides, key
     assert overrides["MTPLX_QWEN4_VERIFY_GLUE"] == "1"
-    assert overrides["MTPLX_QWEN4_BLOCK_VERIFY"] == "1"
+    # The exact block-verify lane is opt-in (2026-09-16 A/B: 3.5% fewer
+    # accepted draft tokens per round than the standard verify on a long
+    # xhigh reasoning turn); never stamped, honoured when exported.
+    assert "MTPLX_QWEN4_BLOCK_VERIFY" not in overrides
     # A pack with no per-module entries resolves every module to the
     # pack-wide values, which can never satisfy the stage-3 contract.
     flat = _flash_next_fixed_m4_config()
@@ -500,7 +502,6 @@ def test_flash_next_speed_lane_is_default_on_and_pack_gated(
     monkeypatch.delenv("MTPLX_QWEN4_FIXED_M4_VERIFY")
     for key in (
         "MTPLX_QWEN4_OPDIET",
-        "MTPLX_QWEN4_BLOCK_VERIFY",
         "MTPLX_QWEN4_PLE_PREFILL_LOOKAHEAD",
         "MTPLX_QWEN4_PLE_FIRST_GATHER_EARLY",
         "MTPLX_SESSION_BANK_SHED_BOUNDARIES",
@@ -511,6 +512,11 @@ def test_flash_next_speed_lane_is_default_on_and_pack_gated(
         overrides = _server_runtime_env_overrides(args, {})
         assert key not in overrides, key
         monkeypatch.delenv(key)
+    # The opt-in block-verify lane: an explicit export is carried unchanged.
+    monkeypatch.setenv("MTPLX_QWEN4_BLOCK_VERIFY", "1")
+    overrides = _server_runtime_env_overrides(args, {})
+    assert overrides.get("MTPLX_QWEN4_BLOCK_VERIFY") in (None, "1")
+    monkeypatch.delenv("MTPLX_QWEN4_BLOCK_VERIFY")
     # An operator's own ranked table or row width beats the stamped values.
     monkeypatch.setenv("MTPLX_FRSPEC_VOCAB", str(tmp_path / "ranked.npy"))
     monkeypatch.setenv("MTPLX_QSA_GATHER_MAX_ROWS", "8")
