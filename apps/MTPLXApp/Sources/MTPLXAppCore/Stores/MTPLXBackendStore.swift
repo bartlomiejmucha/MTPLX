@@ -2806,8 +2806,11 @@ public final class MTPLXBackendStore: ObservableObject {
         let pid = health?.startup?.pid.map(pid_t.init) ?? supervisor.daemonProcessIdentifier()
         let processAlive = pid.map(DaemonSupervisor.processIsAlive)
         let url = baseURL
+        // Read the main-actor constant here; the detached probe must not
+        // touch actor-isolated state.
+        let portProbeSeconds = Self.watchdogPortProbeSeconds
         let portAccepting = await Task.detached(priority: .utility) {
-            TCPConnectProbe.accepts(url: url, timeoutSeconds: Self.watchdogPortProbeSeconds)
+            TCPConnectProbe.accepts(url: url, timeoutSeconds: portProbeSeconds)
         }.value
         return DaemonLivenessEvidence(processAlive: processAlive, portAccepting: portAccepting)
     }
