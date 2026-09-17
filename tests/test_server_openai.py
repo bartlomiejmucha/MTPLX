@@ -1013,6 +1013,43 @@ def test_qwen4_exp_family_defaults_octet_and_nax_neutralize(tmp_path, monkeypatc
     assert "MTPLX_LAZY_TARGET_DISTRIBUTIONS" not in dark
 
 
+@pytest.mark.parametrize("client", ["chat", "opencode", "pi", "hermes"])
+@pytest.mark.parametrize("flash_next", [True, False])
+def test_client_launch_defaults_preserve_model_distribution_policy(
+    tmp_path, monkeypatch, client, flash_next
+):
+    """A client preset is not an operator override of the model's fast path."""
+    from mtplx.commands.public import (
+        _apply_hermes_memory_env_defaults,
+        _apply_opencode_memory_env_defaults,
+        _apply_pi_history_budget_env_defaults,
+    )
+    from mtplx.profiles import apply_profile_env
+
+    for key in tuple(os.environ):
+        if key.startswith("MTPLX_"):
+            monkeypatch.delenv(key)
+    config = _flash_next_fixed_m4_config() if flash_next else {"model_type": "qwen3_next"}
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    launch_env = {}
+    if client != "chat":
+        {
+            "opencode": _apply_opencode_memory_env_defaults,
+            "pi": _apply_pi_history_budget_env_defaults,
+            "hermes": _apply_hermes_memory_env_defaults,
+        }[client](launch_env)
+    for key, value in launch_env.items():
+        monkeypatch.setenv(key, value)
+    args = SimpleNamespace(generation_mode="mtp", verify_strategy="batched", model=str(tmp_path))
+    overrides = openai._server_runtime_env_overrides(args, {})
+    apply_profile_env("turbo", environ=launch_env, runtime_env_overrides=overrides)
+    assert launch_env["MTPLX_LAZY_TARGET_DISTRIBUTIONS"] == ("0" if flash_next else "1")
+    assert launch_env["MTPLX_BATCH_TARGET_ARRAYS"] == ("1" if flash_next else "0")
+    # Removing the lazy-distribution pin alone activates this dormant
+    # launcher pin, shortens D3 to three verify rows and bypasses fixed M4.
+    assert "MTPLX_LAZY_BONUS_VERIFY" not in launch_env
+
+
 def _flash_next_fixed_m4_config() -> dict:
     """The one measured Flash-Next geometry (qwen4_fixed_verify predicate)."""
 

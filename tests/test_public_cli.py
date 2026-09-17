@@ -605,8 +605,8 @@ def test_opencode_memory_defaults_scale_on_high_memory_darwin(monkeypatch):
     # "auto": the engine budgets half the post-model RAM surplus at startup.
     assert env["MTPLX_SESSION_BANK_MAX_BYTES"] == "auto"
     assert env["MTPLX_SESSION_BANK_PER_SESSION_BYTES"] == "auto"
-    assert env["MTPLX_LAZY_TARGET_DISTRIBUTIONS"] == "1"
-    assert env["MTPLX_LAZY_BONUS_VERIFY"] == "1"
+    assert "MTPLX_LAZY_TARGET_DISTRIBUTIONS" not in env
+    assert "MTPLX_LAZY_BONUS_VERIFY" not in env
     assert env["MTPLX_OPENCODE_TOOL_HISTORY_LIVE_FRONTIER"] == "1"
     assert env["MTPLX_SESSION_LIVE_FRONTIER_REFERENCE_RESTORE"] == "1"
     # #282: the launcher exports no read-inspection compaction battery.
@@ -629,8 +629,8 @@ def test_opencode_memory_defaults_stay_conservative_below_high_memory(monkeypatc
     assert env["MTPLX_SESSION_BANK_MAX_ENTRIES"] == "6"
     assert env["MTPLX_SESSION_BANK_MAX_BYTES"] == "auto"
     assert env["MTPLX_SESSION_BANK_PER_SESSION_BYTES"] == "auto"
-    assert env["MTPLX_LAZY_TARGET_DISTRIBUTIONS"] == "1"
-    assert env["MTPLX_LAZY_BONUS_VERIFY"] == "1"
+    assert "MTPLX_LAZY_TARGET_DISTRIBUTIONS" not in env
+    assert "MTPLX_LAZY_BONUS_VERIFY" not in env
     assert env["MTPLX_OPENCODE_TOOL_HISTORY_LIVE_FRONTIER"] == "1"
     assert env["MTPLX_SESSION_LIVE_FRONTIER_REFERENCE_RESTORE"] == "1"
     # #282: the launcher exports no read-inspection compaction battery.

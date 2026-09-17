@@ -227,8 +227,8 @@ NATIVE_MTP_60_FAST_PATH_ENV = {
 # line per dead flag — no matter which layer set it (profile, operator
 # env, or an app/CLI lane default). Loud beats silent: this is exactly how
 # turbo/sustained shipped a dead MTPLX_BATCH_TARGET_ARRAYS=1 for ten weeks
-# (1.0.0 -> 2.9.0) with /health reporting ok:true, and how the coding-agent
-# lanes still pin a MTPLX_LAZY_BONUS_VERIFY=1 the same gate disables.
+# (1.0.0 -> 2.9.0) with /health reporting ok:true. Coding-agent launchers
+# used to pin MTPLX_LAZY_BONUS_VERIFY=1 behind the same gate as well.
 # Entries: (gated key, gating key, why).
 RUNTIME_GATED_ENV_PAIRS: tuple[tuple[str, str, str], ...] = (
     (
