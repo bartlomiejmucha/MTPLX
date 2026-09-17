@@ -9249,7 +9249,7 @@ def test_chat_tools_add_no_tool_contract_when_non_chitchat_disables_tools(monkey
     )
 
     assert response.status_code == 200
-    messages, kwargs = state.runtime.tokenizer.calls[0]
+    messages, _kwargs = state.runtime.tokenizer.calls[0]
     rendered = "\n".join(str(message.get("content") or "") for message in messages)
     stats = seen["request_observability"]
     assert stats["request_filtered_tool_count"] == 0
