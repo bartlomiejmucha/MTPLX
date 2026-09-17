@@ -40,6 +40,35 @@ def test_expected_value_rechecks_deeper_cost_after_expensive_initial_samples():
     assert depths[-128:].count(3) >= 120
 
 
+def test_expected_value_startup_spike_does_not_hide_faster_compiled_depth():
+    policy = ExpectedValueDepthPolicy(
+        max_depth=3, accepts_verify_cost=True, confidence_weight=0,
+        warmup_full_depth_cycles=0, exploration_interval=0,
+    )
+    # A reused compiled function reports no new trace, yet its first call
+    # still pays a one-off startup cost. Subsequent D3 calls are cheaper
+    # than eager D2; that must be learned before the first throughput choice.
+    for verify, draft in [(0.125, 0.027), (0.030, 0.007), (0.031, 0.007), (0.031, 0.007)]:
+        policy.observe(attempted_depth=3, accepted_depths=1,
+                       verify_time_s=verify, draft_time_s=draft)
+    for _ in range(4):
+        policy.observe(attempted_depth=2, accepted_depths=1,
+                       verify_time_s=0.038, draft_time_s=0.005)
+    decision = policy.should_continue_after_draft(
+        drafted_depth=2, max_depth=3, draft_metrics={})
+    assert decision["cost_source"] == "observed_draft_and_verify"
+    assert decision["extra_cost_s"] < 0
+    assert decision["continue"] is True
+
+    # Calibration is not a permanent minimum: sustained cost increases
+    # must still make the policy choose the cheaper shallow route.
+    for _ in range(40):
+        policy.observe(attempted_depth=3, accepted_depths=1,
+                       verify_time_s=0.070, draft_time_s=0.012)
+    assert policy.should_continue_after_draft(
+        drafted_depth=2, max_depth=3, draft_metrics={})["continue"] is False
+
+
 def test_expected_value_does_not_count_untested_positions_as_observed():
     policy = ExpectedValueDepthPolicy(max_depth=3)
     policy.observe(attempted_depth=3, accepted_depths=0)

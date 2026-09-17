@@ -356,8 +356,9 @@ def _opencode_memory_env_defaults() -> dict[str, str]:
         "MTPLX_SESSION_BANK_PER_SESSION_BYTES": "auto",
         "MTPLX_POSTCOMMIT_WAIT_TIMEOUT_S": "30.0",
         "MTPLX_DYNAMIC_PAGED_KV_MAX_INITIAL_NEW_TOKENS": "4096",
-        "MTPLX_LAZY_TARGET_DISTRIBUTIONS": "1",
-        "MTPLX_LAZY_BONUS_VERIFY": "1",
+        # Model/profile defaults own distribution evaluation and verify
+        # width. Generic lazy pins mask Flash-Next's batched fixed-M4 lane;
+        # enabling lazy bonus alone shortens D3 to an eager three-row window.
         "MTPLX_OPENCODE_TOOL_HISTORY_LIVE_FRONTIER": "1",
         "MTPLX_SESSION_LIVE_FRONTIER_REFERENCE_RESTORE": "1",
         # The read-inspection compaction battery is gone (#282): an explicit
@@ -13352,7 +13353,7 @@ def _apply_hermes_memory_env_defaults(env: dict[str, str]) -> None:
     env.setdefault("MTPLX_SESSION_BANK_PER_SESSION_BYTES", "auto")
     env.setdefault("MTPLX_POSTCOMMIT_WAIT_TIMEOUT_S", "30.0")
     env.setdefault("MTPLX_DYNAMIC_PAGED_KV_MAX_INITIAL_NEW_TOKENS", "4096")
-    env.setdefault("MTPLX_LAZY_BONUS_VERIFY", "1")
+    # Keep the model's verify width (the fixed-M4 lane needs the bonus row).
     env.setdefault("MTPLX_OPENCODE_TOOL_HISTORY_LIVE_FRONTIER", "1")
     env.setdefault("MTPLX_SESSION_LIVE_FRONTIER_REFERENCE_RESTORE", "1")
     env.setdefault("MTPLX_ACTIVE_READ_INSPECTION_TOTAL_MAX_LINES", "72")

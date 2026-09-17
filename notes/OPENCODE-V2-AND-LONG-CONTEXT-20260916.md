@@ -1,5 +1,9 @@
 # OpenCode V2 compatibility and long-context investigation
 
+This records the initial investigation. The subsequent measured performance
+fix is documented in [the launch/adaptive fix](DECODE-LAUNCH-AND-ADAPTIVE-FIX-20260917.md).
+That later change adds the engine scheduling and launcher repairs absent here.
+
 ## Release status
 
 The OpenCode V2 session-header plugin is fixed. A separate intermittent

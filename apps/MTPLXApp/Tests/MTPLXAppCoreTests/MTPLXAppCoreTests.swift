@@ -2423,7 +2423,8 @@ final class MTPLXAppCoreTests: XCTestCase {
         XCTAssertNil(command.environment["MTPLX_LONG_CONTEXT_MTP_DEPTH_POLICY"])
         XCTAssertNil(command.environment["MTPLX_LONG_CONTEXT_MTP_DEPTH_THRESHOLD"])
         XCTAssertNil(command.environment["MTPLX_LONG_CONTEXT_MTP_DEPTH"])
-        XCTAssertEqual(command.environment["MTPLX_LAZY_BONUS_VERIFY"], "1")
+        XCTAssertNil(command.environment["MTPLX_LAZY_TARGET_DISTRIBUTIONS"])
+        XCTAssertNil(command.environment["MTPLX_LAZY_BONUS_VERIFY"])
         // #282 passthrough: the app must not export the compaction battery —
         // explicit envs re-arm those compactors past the engine default.
         XCTAssertNil(command.environment["MTPLX_TOOL_RESULT_COMPACT_THRESHOLD_CHARS"])
@@ -2728,7 +2729,8 @@ final class MTPLXAppCoreTests: XCTestCase {
         XCTAssertEqual(command.environment["MTPLX_SESSION_BANK_PER_SESSION_BYTES"], "auto")
         XCTAssertEqual(command.environment["MTPLX_POSTCOMMIT_WAIT_TIMEOUT_S"], "30.0")
         XCTAssertEqual(command.environment["MTPLX_DYNAMIC_PAGED_KV_MAX_INITIAL_NEW_TOKENS"], "4096")
-        XCTAssertEqual(command.environment["MTPLX_LAZY_BONUS_VERIFY"], "1")
+        XCTAssertNil(command.environment["MTPLX_LAZY_TARGET_DISTRIBUTIONS"])
+        XCTAssertNil(command.environment["MTPLX_LAZY_BONUS_VERIFY"])
         XCTAssertEqual(command.environment["MTPLX_OPENCODE_TOOL_HISTORY_LIVE_FRONTIER"], "1")
         XCTAssertEqual(command.environment["MTPLX_SESSION_LIVE_FRONTIER_REFERENCE_RESTORE"], "1")
         // #282 passthrough: the coding-agent lane no longer exports the

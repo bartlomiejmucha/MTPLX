@@ -1429,10 +1429,9 @@ private struct TargetPreset {
                 : defaultOpenCodeSessionBankMaxEntries,
             "MTPLX_POSTCOMMIT_WAIT_TIMEOUT_S": "30.0",
             "MTPLX_DYNAMIC_PAGED_KV_MAX_INITIAL_NEW_TOKENS": "4096",
-            // Mirrors the CLI coding-agent lane (_opencode_memory_env_defaults);
-            // this key was CLI-only drift until the 2026-08-03 parity audit.
-            "MTPLX_LAZY_TARGET_DISTRIBUTIONS": "1",
-            "MTPLX_LAZY_BONUS_VERIFY": "1",
+            // Model/profile defaults own distribution evaluation and verify
+            // width, as in the CLI. Generic lazy pins mask Flash-Next's
+            // batched fixed-M4 lane; lazy bonus alone also removes its fourth row.
             "MTPLX_OPENCODE_TOOL_HISTORY_LIVE_FRONTIER": "1",
             "MTPLX_SESSION_LIVE_FRONTIER_REFERENCE_RESTORE": "1",
             // The read-inspection compactor and force-answer contract are no

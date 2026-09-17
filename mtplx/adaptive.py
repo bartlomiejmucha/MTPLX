@@ -249,7 +249,17 @@ class ExpectedValueDepthPolicy:
             self._cost_counts[attempted_depth] = self._cost_counts.get(attempted_depth, 0) + 1
             for costs, value in ((self._verify_costs, verify_time_s), (self._draft_costs, draft_time_s)):
                 previous = costs.get(attempted_depth, value)
-                costs[attempted_depth] = previous + self.ewma_alpha * (value - previous)
+                # Calibrate recurring cost from the same four samples the
+                # decision gate requires. A reused compiled function can
+                # still pay a one-off startup cost without a new trace;
+                # seeding the EWMA with it parks us on slower eager D2 for
+                # hundreds of cycles. After calibration, track increases as
+                # well as decreases normally (as CostModelDepthPolicy does).
+                costs[attempted_depth] = (
+                    min(previous, value)
+                    if self._cost_counts[attempted_depth] <= 4
+                    else previous + self.ewma_alpha * (value - previous)
+                )
         for index in range(attempted_depth):
             self._attempt_counts[index] += 1
             # These estimates are multiplied in should_continue_after_draft,
