@@ -14166,6 +14166,8 @@ def _transient_trailing_user_sentinel_texts() -> tuple[str, ...]:
         _mtplx_read_only_force_answer_contract_text(),
         _mtplx_pi_convergence_contract_text(),
         _mtplx_forced_tool_choice_text(),
+        _mtplx_no_tool_contract_text(),
+        _mtplx_post_tool_answer_contract_text(),
     )
 
 
