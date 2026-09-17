@@ -55,7 +55,7 @@ All notable user-facing changes to MTPLX. The format is based on
 - **Models in the shared Hugging Face cache are found** (issue #445). The
   model resolver consults `HF_HOME` / `HF_HUB_CACHE` after MTPLX's own
   cache, honours `HF_HUB_OFFLINE`, and holds the copy to the same
-  completeness gate, so a pack already downloaded with the Hugging Face
+  completeness check, so a pack already downloaded with the Hugging Face
   CLI is served without a second download; Forge builds from the local
   copy first and stamps the revision it built from.
 - **aria2 download backend as an opt-in** (PR #452, zeeshanhaque21).
@@ -141,7 +141,7 @@ All notable user-facing changes to MTPLX. The format is based on
   probes were read as death while the commit succeeded. The watchdog now
   reaps only when the daemon's process is gone, its port stops accepting
   connections, or it has been silent for 90 s; a refresh or a chat stream
-  that fails once goes through the same gate. The slow commit itself is
+  that fails once goes through the same check. The slow commit itself is
   fixed too: a prompt whose screenshots exceeded the vision embed cache's
   row budget evicted its own images and re-ran the tower for every one on
   the model-owner thread; the prompt's images are pinned for the pass, and
@@ -209,14 +209,14 @@ All notable user-facing changes to MTPLX. The format is based on
   after three days of uptime). The reconciliation that deletes files the
   manifest no longer reaches only ran when a write found the store near its
   cap, which a generous cap never reached; and after each cleanup the cap
-  gate assumed every unaccounted byte was gone, although blobs still shared
+  check assumed every unaccounted byte was gone, although blobs still shared
   by a later snapshot of the same conversation stay on disk when the entry
   that paid for them is evicted, so the directory could sit above
   `--ssd-session-cache-max-size` for good. The daemon now reconciles the
   store in the background every time it opens the cache (yielding to
   requests, never blocking the boot or the first request; one
   `mtplx_ssd_session_cache_reconcile` line in the daemon log says what it
-  reclaimed), the cap gate prices the directory as it is on disk, reclaims
+  reclaimed), the cap check counts the directory as it is on disk, reclaims
   garbage on the writer thread before it would evict live entries for the
   room, and never walks the store on the request thread. Blobs of a write in
   flight, and blobs a row committed during a pass names, are never deleted.
@@ -272,13 +272,13 @@ All notable user-facing changes to MTPLX. The format is based on
   scales; the converter now falls back to that scalar for n-gram shards and
   accounts for it, with regression tests for both layouts.
 - **Flash-Next block verification is exact at every depth.** Three
-  independent audits enumerated the block-verify accept law on tiny
+  independent audits enumerated the block-verify acceptance rule on tiny
   vocabularies and found it exact at depths 1 and 2 but off by up to 4e-2
   total variation at depth 3, in the cases where the last depth's acceptance probability had
   been clipped to 1. The ladder now caps the reach budget by the realised
   reach, propagates that feasible budget, and corrects a rejection from the
-  deficit the coins leave; an enumeration test compares the emitted joint
-  law with the target for both laws at depths 1 to 4 (exact to 1e-12).
+  shortfall the acceptance probabilities leave; an enumeration test compares the emitted joint
+  distribution with the target for both rules at depths 1 to 4 (exact to 1e-12).
 - **Warm agent turns on hybrid models restore the recurrent state exactly.**
   A near-prefix restore whose gap to the banked turn was 1 to 8 tokens (the
   shape of a re-rendered agent turn) trimmed the attention KV but kept the
@@ -301,7 +301,7 @@ All notable user-facing changes to MTPLX. The format is based on
   cached state is dropped, and the daemon stays up. A row that constrained
   decoding masks to -inf with a finite winner is legitimate and passes the
   guard.
-- **The Flash-Next AR sampler follows the reference nucleus law.** The
+- **The Flash-Next AR sampler follows the reference nucleus rule.** The
   pipelined AR sampler measured top-p on the top-k slice alone, keeping one
   to five fewer of the top-20 tokens than the other sampling paths at 1.0/0.95/20;
   it now measures the nucleus on the full-vocabulary softmax like the CPU
@@ -340,21 +340,21 @@ All notable user-facing changes to MTPLX. The format is based on
   changed the first message every turn and cost a cold re-prefill of the
   whole history. A late system message now becomes a user turn in place.
 - **The Flash-Next serving optimizations reach a served daemon.** Four
-  hot-path gates (`MTPLX_QWEN4_OPDIET`, `MTPLX_QWEN4_VERIFY_GLUE`,
+  hot-path settings (`MTPLX_QWEN4_OPDIET`, `MTPLX_QWEN4_VERIFY_GLUE`,
   `MTPLX_QWEN4_DRAFT_K20_PRESCATTER`, `MTPLX_QWEN4_BLOCK_VERIFY`) were read
   once at import, before the server applied the Flash-Next defaults,
   so `/health` reported them configured while the daemon ran with all four
-  off (davidtai's PR #475 found the same frozen readers). The gates are
+  off (davidtai's PR #475 found the same problem). The settings are
   re-read when the model's runtime env is applied, before the load. Three of
-  them are on by default; the exact block-verify lane
+  them are on by default; the exact block verify
   (`MTPLX_QWEN4_BLOCK_VERIFY`) is an opt-in export, because on a
   45,000-token reasoning turn at effort xhigh it accepted 3.5 percent fewer
   draft tokens per round than the standard verify across alternating
-  boots (both laws are distribution-exact; the faster one is the default).
+  boots (both are distribution-exact; the faster one is the default).
 - **Reasoning substitution checks the whole tool call.** The
   committed-reasoning canonicalizer compared tool calls by their loop key
   (command or path only), so a `write` to the same file with new content
-  passed the gate and the prompt was served with the old body. The gate now
+  passed the check and the prompt was served with the old body. The check now
   compares the complete argument set in both markup dialects.
 - **Desktop web views can be allowlisted for CORS** (issue #473). The
   origin validator accepted only `http` and `https`, so
@@ -391,8 +391,8 @@ All notable user-facing changes to MTPLX. The format is based on
   `--model-id` still wins, and without a daemon the pack metadata for the id
   in hand answers as before. 2.11.2 already advertised image input from the
   pack metadata; the port-only form assumed the catalog default id.
-- **`/health` fast-path verdicts against the server's own overrides.** The
-  Flash-Next lane keeps the verify snapshot and pins the batched target
+- **`/health` fast-path checks against the server's own overrides.** The
+  Flash-Next path keeps the verify snapshot and pins the batched target
   distributions on purpose, and `/health` reported those three keys as
   `ok: false` against the profile block. The expectation is now the
   runtime override the server resolved, with the entry naming its source
@@ -404,7 +404,7 @@ All notable user-facing changes to MTPLX. The format is based on
 - **Flash-Next agent launches draft to the chosen depth.** With the
   Adaptive depth switch unset, the app's Pi and Hermes launches no longer
   turn on the expected-value depth policy for Flash-Next: measured on the
-  shipped 2.11.2 lane, the policy decodes 7 to 8 percent slower than a
+  shipped 2.11.2 settings, the policy decodes 7 to 8 percent slower than a
   fixed depth 3 at 2k and at 19k tokens of context, and the 27B pair is a
   tie, so the 27B presets are unchanged. The switch still turns the policy
   on explicitly.
