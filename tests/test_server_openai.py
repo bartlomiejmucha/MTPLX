@@ -4214,6 +4214,101 @@ class CaptureTokenizer:
         return "".join(chr(int(token)) for token in tokens)
 
 
+class JSONToolPrefixTokenizer(CaptureTokenizer):
+    """Like native Qwen templates, render tools in incoming JSON key order."""
+
+    def apply_chat_template(self, messages, **kwargs):
+        self.calls.append((messages, kwargs))
+        text = json.dumps(kwargs.get("tools") or [], ensure_ascii=False) + "\n"
+        text += "\n".join(
+            f"{message['role']}:{message.get('content') or ''}"
+            for message in messages
+        )
+        if kwargs.get("add_generation_prompt"):
+            text += "\nassistant:"
+        return self.encode(text) if kwargs.get("tokenize", True) else text
+
+
+def test_tool_schema_object_order_does_not_change_rendered_prefix(monkeypatch):
+    monkeypatch.setenv("MTPLX_CHAT_ENCODE_CACHE", "off")
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "lookup",
+            "description": "Look up a value",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Query"}},
+                "required": ["query"],
+            },
+        },
+    }
+
+    def reverse_objects(value):
+        if isinstance(value, dict):
+            return {key: reverse_objects(item) for key, item in reversed(value.items())}
+        if isinstance(value, list):
+            return [reverse_objects(item) for item in value]
+        return value
+
+    prefixes = []
+    for index, spec in enumerate((tool, reverse_objects(tool))):
+        normalized = openai._normalize_tool_specs([spec])
+        assert normalized == [tool]  # No schema fields or values disappear.
+        ids = openai._encode_messages(
+            JSONToolPrefixTokenizer(),
+            [openai.ChatMessage(role="user", content=f"Turn {index}")],
+            enable_thinking=False,
+            tool_prompt_mode="native",
+            tools=normalized,
+        )
+        prefixes.append("".join(map(chr, ids)).split("\n", 1)[0])
+    assert prefixes[0] == prefixes[1]
+
+
+@pytest.mark.parametrize("client_hint", ["mtplx_app", "opencode", "pi", "hermes"])
+def test_tool_choice_none_keeps_cached_schema_but_disables_calls(monkeypatch, client_hint):
+    state = _fake_state()
+    foreground = ForegroundState()
+    state.lock = foreground.lock
+    state.has_foreground = foreground.has_foreground
+    state.runtime.tokenizer = JSONToolPrefixTokenizer()
+    state.args.stats_footer = False
+    captured = []
+
+    def fake_run_generation(_state, prompt_ids, **kwargs):
+        captured.append((list(prompt_ids), kwargs["session_policy_fingerprint"]))
+        return _fake_generation("The result is available.")
+
+    monkeypatch.setattr(openai, "_run_generation", fake_run_generation)
+    client = TestClient(create_app(state))
+    messages = [
+        {"role": "user", "content": "Look up the current value."},
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": "lookup-1", "type": "function", "function": {
+                "name": "session_status", "arguments": "{}",
+            },
+        }]},
+        {"role": "tool", "tool_call_id": "lookup-1", "content": "The value is 7."},
+    ]
+    for choice in ("auto", "none"):
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"x-mtplx-cache-mode": "bypass", "x-mtplx-client": client_hint},
+            json={"messages": messages, "tools": [_tool_schema()], "tool_choice": choice},
+        )
+        assert response.status_code == 200
+        if choice == "none":
+            assert not response.json()["choices"][0]["message"].get("tool_calls")
+    prompts = ["".join(map(chr, ids)) for ids, _fingerprint in captured]
+    assert prompts[0].split("\n", 1)[0] == prompts[1].split("\n", 1)[0]
+    # OpenCode's compact lane puts the tool name in its stable digest;
+    # native/hybrid lanes carry the full JSON schema prefix.
+    assert "session_status" in prompts[1]
+    assert captured[0][1] == captured[1][1]
+    assert "MTPLX post-tool answer turn:" in prompts[1]
+
+
 class StepTemplateIgnoringThinkingTokenizer(CaptureTokenizer):
     """Step-like template fixture that always opens <think> on generation."""
 
@@ -9130,7 +9225,7 @@ def test_chat_tools_add_no_tool_contract_when_non_chitchat_disables_tools(monkey
     messages, kwargs = state.runtime.tokenizer.calls[0]
     rendered = "\n".join(str(message.get("content") or "") for message in messages)
     stats = seen["request_observability"]
-    assert "tools" not in kwargs
+    assert stats["request_filtered_tool_count"] == 0
     assert "MTPLX direct reply turn:" in rendered
     assert "Start with the final user-facing answer" in rendered
     assert stats["no_tools_contract_active"] is True
@@ -9210,7 +9305,8 @@ def test_final_round_after_tools_gets_post_tool_answer_contract(monkeypatch):
     messages, kwargs = state.runtime.tokenizer.calls[0]
     rendered = "\n".join(str(message.get("content") or "") for message in messages)
     stats = seen["request_observability"]
-    assert "tools" not in kwargs
+    assert [tool["function"]["name"] for tool in kwargs["tools"]] == ["web_search"]
+    assert stats["request_filtered_tool_count"] == 0
     assert "MTPLX post-tool answer turn:" in rendered
     assert "Match the depth the user asked for" in rendered
     # The model must be anchored to today and told fresher tool results

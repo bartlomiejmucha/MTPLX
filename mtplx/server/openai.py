@@ -8589,7 +8589,11 @@ def _normalize_tool_specs(tools: list[dict[str, Any]] | None) -> list[dict[str, 
                 status_code=400,
                 detail=f"tools[{index}] must include a function name",
             )
-        normalized.append(tool)
+        # JSON object order is not schema semantics. Native chat templates
+        # render that order verbatim, so a client's fresh JSON encoding must
+        # not change the system prefix and force a full-history prefill.
+        # Preserve list order (tools, enums, required fields) and every value.
+        normalized.append(json.loads(json.dumps(tool, sort_keys=True)))
     return normalized
 
 
@@ -31181,6 +31185,7 @@ def create_app(state: ServerState) -> FastAPI:
         # its closures read exactly as before the extraction.
         opencode_client = policy.opencode_client
         tool_specs = policy.tool_specs
+        prompt_tool_specs = policy.prompt_tool_specs
         tools_active = policy.tools_active
         agent_transcript_tools_active = policy.agent_transcript_tools_active
         read_only_force_answer_contract_active = (
@@ -31291,7 +31296,7 @@ def create_app(state: ServerState) -> FastAPI:
             strip_assistant_reasoning_history=state.args.strip_assistant_reasoning_history,
             scoped_reasoning_history=_reasoning_history_scoped_active(state),
             preserve_reasoning_history=_reasoning_history_preserve_echo_active(state),
-            tools=tool_specs if tools_active else None,
+            tools=prompt_tool_specs,
             tool_choice=request.tool_choice,
             tool_prompt_mode=template_tool_prompt_mode,
             template_observability=template_observability,
@@ -31385,7 +31390,7 @@ def create_app(state: ServerState) -> FastAPI:
                 request=request,
                 thinking_enabled=thinking_enabled,
                 reasoning_effort=reasoning_effort,
-                tools=tool_specs if tools_active else None,
+                tools=prompt_tool_specs,
                 tool_choice=request.tool_choice,
                 tool_prompt_mode=template_tool_prompt_mode,
                 template_observability=template_observability,
@@ -31486,7 +31491,7 @@ def create_app(state: ServerState) -> FastAPI:
             thinking_enabled=thinking_enabled,
             generation_mode=request_generation_mode,
             depth=effective_request_depth,
-            tools_active=tools_active,
+            tools_active=bool(prompt_tool_specs),
             tool_prompt_mode=tool_prompt_mode,
             tool_choice=request.tool_choice,
             no_tools_contract_active=no_tools_contract_active,
@@ -31511,11 +31516,7 @@ def create_app(state: ServerState) -> FastAPI:
                 thinking_enabled=thinking_enabled,
                 generation_mode=request_generation_mode,
                 depth=effective_request_depth,
-                tools_active=(
-                    bool(postcommit_tool_specs)
-                    if read_only_force_answer_contract_active
-                    else tools_active
-                ),
+                tools_active=bool(postcommit_tool_specs),
                 tool_prompt_mode=(
                     postcommit_tool_prompt_mode
                     if read_only_force_answer_contract_active
@@ -35822,7 +35823,7 @@ def create_app(state: ServerState) -> FastAPI:
             strip_assistant_reasoning_history=state.args.strip_assistant_reasoning_history,
             scoped_reasoning_history=_reasoning_history_scoped_active(state),
             preserve_reasoning_history=_reasoning_history_preserve_echo_active(state),
-            tools=policy.tool_specs if policy.tools_active else None,
+            tools=policy.prompt_tool_specs,
             tool_choice=chat_request.tool_choice,
             tool_prompt_mode=policy.tool_prompt_mode,
         )

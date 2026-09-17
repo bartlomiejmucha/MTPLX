@@ -96,6 +96,7 @@ class RequestPolicy:
     requested_tool_specs: list[dict[str, Any]] = field(default_factory=list)
     tool_specs: list[dict[str, Any]] = field(default_factory=list)
     tools_active: bool = False
+    prompt_tool_specs: list[dict[str, Any]] | None = None
     agent_transcript_tools_active: bool = False
     postcommit_tool_specs: list[dict[str, Any]] | None = None
 
@@ -518,6 +519,15 @@ def resolve_request_policy(
             # message carries the "answer now, no more tools" conditioning;
             # prefix stability owns the toolset bytes.
             pass
+    # A per-turn tool prohibition controls execution, not the declared
+    # schema prefix. Keep the same prompt tools on auto -> none -> auto;
+    # the existing trailing no-tool contract closes the tool phase, and
+    # tools_active still governs parsing/emission of calls.
+    prompt_tool_specs = (
+        tool_specs
+        if tools_active or srv._tool_choice_disables_tools(request.tool_choice)
+        else None
+    )
     no_tools_contract_applies = bool(
         chat
         and not read_only_force_answer_contract_active
@@ -633,8 +643,8 @@ def resolve_request_policy(
         )
     )
     postcommit_tool_specs = (
-        tool_specs
-        if tools_active
+        prompt_tool_specs
+        if prompt_tool_specs
         else (requested_tool_specs if agent_transcript_tools_active else None)
     )
     background = bool(
@@ -679,7 +689,7 @@ def resolve_request_policy(
         state.args,
         headers=headers,
         metadata=metadata,
-        tools_active=tools_active,
+        tools_active=bool(prompt_tool_specs),
         backend=srv._backend_descriptor(state),
     )
     template_tool_prompt_mode = tool_prompt_mode
@@ -712,6 +722,7 @@ def resolve_request_policy(
             requested_tool_specs=requested_tool_specs,
             tool_specs=tool_specs,
             tools_active=tools_active,
+            prompt_tool_specs=prompt_tool_specs,
             agent_transcript_tools_active=agent_transcript_tools_active,
             postcommit_tool_specs=postcommit_tool_specs,
             backend_chat_policy_active=backend_chat_policy_active,
@@ -891,6 +902,7 @@ def resolve_request_policy(
         requested_tool_specs=requested_tool_specs,
         tool_specs=tool_specs,
         tools_active=tools_active,
+        prompt_tool_specs=prompt_tool_specs,
         agent_transcript_tools_active=agent_transcript_tools_active,
         postcommit_tool_specs=postcommit_tool_specs,
         read_only_force_answer_contract_active=read_only_force_answer_contract_active,
