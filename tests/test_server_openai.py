@@ -4266,6 +4266,33 @@ def test_tool_schema_object_order_does_not_change_rendered_prefix(monkeypatch):
     assert prefixes[0] == prefixes[1]
 
 
+@pytest.mark.parametrize("after_tool", [False, True])
+def test_disabled_tool_turn_contract_is_not_saved_as_client_history(after_tool):
+    messages = [openai.ChatMessage(role="user", content="Explain the result.")]
+    if after_tool:
+        messages += [
+            openai.ChatMessage(role="assistant", content="", tool_calls=[{
+                "id": "lookup-1", "type": "function", "function": {
+                    "name": "session_status", "arguments": "{}",
+                },
+            }]),
+            openai.ChatMessage(role="tool", tool_call_id="lookup-1", content="7"),
+        ]
+    request = openai.ChatCompletionRequest(
+        messages=messages, tools=[_tool_schema()], tool_choice="none"
+    )
+    policy = openai.resolve_request_policy(
+        _fake_state(), request, headers={"x-mtplx-client": "mtplx_app"}, metadata={}
+    )
+    assert len(policy.messages_for_generation) == len(messages) + 1
+    assert "MTPLX " in policy.messages_for_generation[-1].content
+    # The client echoes its own messages, not our request-only instruction.
+    # Banking the suffix as history made a 2,820-token answer replay on the
+    # next native chat turn, despite a successfully stored final snapshot.
+    assert policy.raw_messages_for_postcommit == messages
+    assert policy.prompt_tool_specs == policy.postcommit_tool_specs
+
+
 @pytest.mark.parametrize("client_hint", ["mtplx_app", "opencode", "pi", "hermes"])
 def test_tool_choice_none_keeps_cached_schema_but_disables_calls(monkeypatch, client_hint):
     state = _fake_state()

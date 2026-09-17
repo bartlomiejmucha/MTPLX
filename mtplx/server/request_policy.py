@@ -599,6 +599,10 @@ def resolve_request_policy(
             messages_for_generation,
         )
     )
+    # The client never echoes our request-only closing instructions. Keep
+    # the unsteered history for postcommit, rather than banking a suffix
+    # that moves the next turn's divergence ahead of the entire answer.
+    messages_before_turn_contract = list(messages_for_generation)
     if chat:
         if read_only_force_answer_contract_active:
             messages_for_generation = (
@@ -631,7 +635,7 @@ def resolve_request_policy(
         list(request.messages)
         if read_only_force_answer_contract_active
         else (
-            list(messages_for_generation)
+            messages_before_turn_contract
             if (
                 no_tools_contract_active
                 or post_tool_answer_contract_active
