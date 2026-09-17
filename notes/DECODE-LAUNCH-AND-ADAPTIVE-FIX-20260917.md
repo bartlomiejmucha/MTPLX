@@ -69,3 +69,25 @@ The original 26.25 tok/s incident remains in its Godview report. That request
 was mostly D3, so the adaptive D2 defect alone does not explain all of its cost;
 the missing original GPU/resource trace cannot be reconstructed retroactively.
 The fixes above are supported by controlled, reversible performance comparisons.
+
+## Installed product check
+
+Signed build 2011046 contains the rebuilt native launcher and both updated
+runtime wheels. Its actual OpenCode launch preset resolves to the model's
+batched policy. The existing app and global CLI runtimes have matching sources;
+the CLI reports the local 2.11.3 candidate without a launcher-path change.
+
+With the native dashboard visible, the installed daemon measured 42.51 tok/s
+after a cold 200k prefill, then 50.60 tok/s on a warm 200k follow-up with
+200,068 cached tokens and 0.886 s TTFT. The cold run also recorded OS compression
+and lower GPU clocks; it is retained as an actual product result, not omitted
+in favor of the controlled figures.
+
+OpenCode CLI, Pi and Hermes each completed a real code repair plus a follow-up
+feature and passed five independent generated tests. OpenCode Desktop added a
+function through the GUI and passed 13 tests. Native chat also produced the
+correct visible response at 64.5 tok/s. Detailed receipts and the initial
+Hermes fixture-directory mistake are retained in the private report.
+
+The candidate is installed locally for testing. Nothing was pushed, tagged or
+published by this work.
