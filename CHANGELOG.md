@@ -89,7 +89,50 @@ All notable user-facing changes to MTPLX. The format is based on
   peak serving memory, what it is for, and the profile and depth MTPLX
   resolves on its own; two tests keep the table equal to the catalog.
 
+- **A bounded request replay tool.** `scripts/replay_chat_request.py`
+  replays a captured chat request against a daemon with an explicit output
+  budget, so a 100k-token agent turn can be re-measured without re-running
+  the agent's tools.
+
 ### Fixed
+
+- **A conversation with tools stays warm from turn to turn.** The app's
+  JSON encoder wrote the keys of its tool declarations in a different order
+  on every request and the native template rendered that order verbatim,
+  so an 18,776-token web-search conversation prefilled from the start on
+  every turn (14.7 s and 15.2 s to the first token, 0 cached tokens). Tool
+  schemas are canonicalized once at the server boundary with every field,
+  value and list order preserved; a `tool_choice: none` turn keeps the
+  declarations in the prompt and on the same cache identity while calls
+  stay disabled; and the server's request-only closing instruction is no
+  longer banked as client history (that alone replayed a 2,820-token
+  answer, 2.8 s). Replayed 19k-token turns against the same build without
+  the fix: 15.26 s to 0.57 s and 13.93 s to 0.66 s to the first token;
+  installed-app follow-ups at 0.29 s and 0.28 s with 11,421 and 12,510
+  cached tokens. Seven regression tests across the app, OpenCode, Pi and
+  Hermes. A conversation older than this release prefills once more on
+  its first turn.
+- **Agent launches no longer override the model's verify path, and the
+  adaptive depth policy no longer learns a startup spike as its recurring
+  cost.** The app's OpenCode, Pi and Hermes presets and the CLI launchers
+  exported `MTPLX_LAZY_TARGET_DISTRIBUTIONS=1` and
+  `MTPLX_LAZY_BONUS_VERIFY=1` from an older tuning, which on Flash-Next
+  switched off the batched compiled verifier the chat launch already used;
+  both exports are gone and the model's defaults apply (explicit operator
+  exports still win, other families keep their profile defaults). The
+  expected-value depth policy seeded its cost estimate with a one-off
+  125 ms first call (the next three were 30 to 31 ms) and chose the slower
+  eager path for 453 of 464 cycles; it now calibrates on the minimum of its
+  four warm-up samples before the weighted average starts, and a sustained
+  rise still lowers the depth. A 108,919-token OpenCode turn, four
+  alternating runs against the same build without the change: 48.83 to
+  61.77 tok/s (+26.5 percent), compiled verify calls 11 to 376 per 1,024
+  output tokens, memory flat; 200,073 tokens hold at about 50 tok/s.
+- **OpenCode 2 loads the MTPLX session-header plugin** (issue #498). The
+  plugin is a small package with the version 1 entrypoint and a version 2
+  `setup` hook scoped to the MTPLX provider; 1.18.29 and 2.0.5 clients both
+  send the headers, the managed registration migrates in place and other
+  plugins are preserved.
 - A conversation whose generation-final snapshot was refused for size (over the per-session cap, issue #499's 48 GB shape) reports that refusal as the next turn's `cache_miss_reason` (`oversized_snapshot_skipped`) and in the bank's `last_oversized_skip`; it used to surface as the cold tier's `ssd_prefix_miss`.
 
 - **A busy daemon is no longer reaped as dead** (issue #487, HenriGrimm).
