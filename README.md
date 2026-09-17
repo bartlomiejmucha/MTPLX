@@ -2,7 +2,7 @@
 
 <img src="docs/assets/readme/hero.svg" alt="MTPLX" width="100%" />
 
-# Run local LLMs on Apple Silicon, around twice as fast.
+# The fastest way to run Qwen 3.8 on a Mac.
 
 [![PyPI](https://img.shields.io/pypi/v/mtplx?label=PyPI)](https://pypi.org/project/mtplx/)
 [![CI](https://github.com/youssofal/MTPLX/actions/workflows/ci.yml/badge.svg)](https://github.com/youssofal/MTPLX/actions/workflows/ci.yml)
@@ -12,9 +12,26 @@
 
 </div>
 
-MTPLX is a native Mac app and a command line for running local language models with multi-token prediction. Modern models like Qwen 3.5/3.6/3.8 ship with built-in MTP heads. Almost no runtime uses them. MTPLX does: the model drafts several tokens ahead of itself, verifies each drafted block in a single batched forward pass, and commits tokens through exact rejection sampling with residual correction. Same model, same output distribution, measured 1.6x faster on a 16 GB M4 Mac mini and 2.24x on an M5 Max.
+MTPLX is a native Mac app and a command line that runs local language models on Apple Silicon with the model's own multi-token prediction (MTP) heads. It runs Qwen 3.8 Flash Next, the 125B mixture of experts, and Qwen 3.8 27B, plus Qwen 3.6, Qwen 3.5 and Gemma 4. The model drafts several tokens ahead of itself, one batched forward pass verifies the draft, and tokens are committed through exact rejection sampling with residual correction. The output distribution is the model's own at any temperature, and decode runs at around twice the speed of plain decoding: measured 1.6x on a 16 GB M4 Mac mini and 2.24x on an M5 Max.
 
-There is no second draft model eating your RAM, and no greedy shortcut that quietly changes what the model would have said at real sampling settings. The acceptance math is the Leviathan and Chen rejection sampling theorem with residual correction, so `temperature=0.6, top_p=0.95` behaves exactly like normal decoding, just faster.
+## Measured speeds
+
+Every number below was measured on a MacBook Pro M5 Max with 128 GB, fans verified at maximum, sampled at the model's own settings. Conditions and sources for every row, with the raw logs where they exist, are at [mtplx.com/benchmarks](https://mtplx.com/benchmarks/).
+
+| Model | Speed | Run |
+|---|---|---|
+| Qwen 3.8 Flash Next, Optimized Speed | 125.8 tok/s | one OpenCode request: 1,301 tokens generated, 18,539-token prompt with 18,364 tokens served from cache, MTP depth 3, MTPLX 2.11.3, 16 September 2026 |
+| Qwen 3.8 Flash Next | 79.3 tok/s | 9k-token code prompt, 1,500 tokens generated, thinking off, two alternating boots each, MTPLX 2.11.3 (62.5 on 2.11.2) |
+| Qwen 3.8 Flash Next | 61.8 tok/s | 109k-token OpenCode turn, mean of two runs, MTPLX 2.11.3 |
+| Qwen 3.8 Flash Next | 50.3 tok/s | 200k-token OpenCode turn, warm, mean of two runs, MTPLX 2.11.3 |
+| Qwen 3.8 27B, Optimized Speed | 87.6 tok/s | rewriting a file it just wrote, stock settings, MTPLX 2.10.0 |
+| Qwen 3.8 27B, Bare Speed | 65.2 tok/s | fresh coding task at official Qwen 3.8 sampling, generation to the model's own stop, MTPLX 2.7.0 |
+| Qwen 3.6 27B, Optimized Speed | 81.74 tok/s | the 27B record on a fresh generation: 192-token bench, thinking off, temperature 0.6, twin runs, 2.69x over 30.37 plain decode, 2 July 2026, [raw logs](https://mtplx.com/benchmarks/receipts/2026-07-02-record/) |
+| Qwen 3.5 4B, Optimized Speed | 227.8 tok/s | depth 3, 1.71x over 133.6 plain decode, MTPLX 2.2.0 |
+
+The speed comes with the output unchanged. On every release MTPLX draws a thousand four-token samples from the fast path and a thousand from the plain path at temperature 1, top-p 0.95, top-k 20, and compares the two distributions by token id. On 2.11.3 they match within the plain path's own noise on both Flash Next and the 27B Quality pack. The acceptance rule is the Leviathan and Chen rejection sampling theorem with residual correction, so `temperature=0.6, top_p=0.95` behaves exactly like normal decoding, just faster. There is no second draft model eating your RAM, and no greedy shortcut that quietly changes what the model would have said.
+
+How MTPLX compares with mlx-serve, oMLX, LM Studio, Ollama, llama.cpp and mlx-lm, with a version, a machine and a date on every number: [mtplx.com/compare](https://mtplx.com/compare/).
 
 ## Get it
 
@@ -24,7 +41,8 @@ There is no second draft model eating your RAM, and no greedy shortcut that quie
 quant with great coding speeds and good quality. Its two siblings sit right
 under it in the app and CLI: Bare Speed (quickest burst chat speeds, lower
 quality and slower on long coding tasks) and Optimized Quality (8-bit dynamic
-quant, good coding speeds and perfect quality). Qwen 3.6 Optimized Speed V2
+quant, good coding speeds and perfect quality). On a Mac with 96 GB or more,
+Qwen 3.8 Flash Next Optimized Speed is the pick. Qwen 3.6 Optimized Speed V2
 remains available directly below them.
 
 **The CLI** on its own:
@@ -42,6 +60,31 @@ with 32 GB or more; on M1 and M2 the app and CLI pick its FP16 build (same
 weights, native precision for those chips) automatically. Both check your Mac
 before recommending anything.
 
+## Qwen 3.8 Flash Next on a Mac
+
+Qwen 3.8 Flash Next is Qwen's 125B-A6B preview of the Qwen4 architecture: a hybrid GatedDeltaNet mixture of experts with Qwen Sparse Attention and a 51B-parameter n-gram table. MTPLX 2.10.0 was the first Apple Silicon backend for the family, and it runs the model's own MTP head as an exact speculative decoder. Two packs, both for Macs with 96 GB of unified memory or more:
+
+- `Youssofal/Qwen3.8-Flash-Next-MTPLX-Optimized-Speed`: dynamic 4-bit with the sparse-attention projections at 8-bit. The recommended build. 115.1 GB download including the 32 GB n-gram table, about 83 GB resident.
+- `Youssofal/Qwen3.8-Flash-Next-MTPLX-Bare-Speed`: flat 4-bit, the quickest build. 106.3 GB download, about 74 GB resident.
+
+The n-gram table streams from SSD by default, so the weights stay resident and the table does not have to. Context window 262,144 tokens; 261,120-token prompts decode on 2.11.3. Image input works. In the app, pick "Qwen 3.8 Flash-Next Optimized Speed"; from the terminal:
+
+```bash
+mtplx serve --model Youssofal/Qwen3.8-Flash-Next-MTPLX-Optimized-Speed
+```
+
+Then point OpenCode, Pi, Hermes, Claude Code, Cline, Cursor or anything that speaks the OpenAI or Anthropic API at `http://127.0.0.1:8000`. The guide with every measured number and its conditions: [mtplx.com/models/qwen3.8-flash-next](https://mtplx.com/models/qwen3.8-flash-next/).
+
+## Qwen 3.8 27B on a Mac
+
+Qwen 3.8 27B is the coding flagship for Macs with 32 GB or more. MTPLX shipped it on 15 August 2026, the day after Qwen released it. Three packs, each with an FP16 sibling for M1 and M2 that the app and CLI pick automatically:
+
+- `Youssofal/Qwen3.8-27B-MTPLX-Optimized-Speed`: 4-bit dynamic, 20.4 GB, 23.6 GB peak. The default for coding. Against the bf16 model on a mixed corpus of code, prose and JSON it agrees on 96.0 percent of top-1 tokens with a KL divergence of 0.012.
+- `Youssofal/Qwen3.8-27B-MTPLX-Bare-Speed`: flat 4-bit, 16.0 GB, 17.0 GB peak. Quickest chat speeds.
+- `Youssofal/Qwen3.8-27B-MTPLX-Optimized-Quality`: 8-bit dynamic, 29.4 GB, 32.7 GB peak, for 36 GB or more. 99.3 percent top-1 agreement with bf16, KL 0.0005.
+
+The guide: [mtplx.com/models/qwen3.8-27b](https://mtplx.com/models/qwen3.8-27b/).
+
 ## Models and recommended settings
 
 Every model here is an official MTPLX pack on Hugging Face under [Youssofal](https://huggingface.co/Youssofal). "Fits" is the memory the pack actually peaks at while serving, next to the smallest Mac the app and CLI will offer it on. The preset column is what MTPLX resolves by itself, so this table is what you get by doing nothing.
@@ -57,7 +100,7 @@ Every model here is an official MTPLX pack on Hugging Face under [Youssofal](htt
 | `Qwen3.8-27B-MTPLX-Bare-Speed-FP16` | 32 GB and up, peaks at 20.0 GiB | The Bare Speed pack for M1 and M2: same weights, every 16-bit tensor cast to fp16. | Turbo, depth 3 |
 | `Qwen3.8-27B-MTPLX-Optimized-Speed-FP16` | 32 GB and up, peaks at 25.0 GiB | The recommended coding model for M1 and M2. | Turbo, depth 3 |
 | `Qwen3.8-27B-MTPLX-Optimized-Quality-FP16` | 36 GB and up, peaks at 33.0 GiB | The Optimized Quality pack for M1 and M2. | Turbo, depth 3 |
-| `Qwen3.8-Flash-Next-MTPLX-Optimized-Speed` | 96 GB and up, peaks at 87 GiB resident | The 125B MoE preview, dynamic 4-bit with 8-bit attention. Its 32 GB n-gram table streams from SSD instead of taking RAM. | Turbo, depth 3. This family accepts up to depth 5 |
+| `Qwen3.8-Flash-Next-MTPLX-Optimized-Speed` | 96 GB and up, peaks at 87 GiB resident | The 125B MoE, dynamic 4-bit with 8-bit attention. Its 32 GB n-gram table streams from SSD instead of taking RAM. 125.8 tok/s on an OpenCode request on an M5 Max. | Turbo, depth 3. This family accepts up to depth 5 |
 | `Gemma4-MTPLX-Optimized-Speed` | 32 GB and up, peaks at 18.0 GiB | High quality, moderate speeds. Runs as an assistant pair, so the tuned control is the draft block size rather than depth. | Sustained |
 | **What the author runs** | M5 Max, 128 GB | Flash-Next Optimized Speed, for everything | Turbo, depth 3 |
 
@@ -115,7 +158,7 @@ Forge takes a Hugging Face repo and turns it into an MTPLX-ready MTP model: conv
 
 MTPLX does not support attaching a separately supplied MTP sidecar to an arbitrary MLX trunk. Matching architecture fields, tensor shapes, or provenance labels cannot prove that the head was trained against those exact trunk weights. Use a complete model that already includes its matching MTP weights, or use Forge to build and verify an artifact from its original source checkpoint.
 
-The official catalog lives on Hugging Face under [Youssofal](https://huggingface.co/Youssofal): Qwen 3.8 27B (Bare Speed, Optimized Speed, Optimized Quality, each with an FP16 build for M1 and M2), Qwen 3.6 (27B, 35B MoE) in speed and quality builds (the 35B MoE adds a balance build), Qwen 3.5 (4B, 9B), plus Gemma 4. The app and the CLI recommend from these based on your hardware.
+The official catalog lives on Hugging Face under [Youssofal](https://huggingface.co/Youssofal): Qwen 3.8 Flash Next (Optimized Speed, Bare Speed), Qwen 3.8 27B (Bare Speed, Optimized Speed, Optimized Quality, each with an FP16 build for M1 and M2), Qwen 3.6 (27B, 35B MoE) in speed and quality builds (the 35B MoE adds a balance build), Qwen 3.5 (4B, 9B), plus Gemma 4. The app and the CLI recommend from these based on your hardware.
 
 ## The server
 
@@ -127,7 +170,7 @@ curl http://127.0.0.1:8000/v1/chat/completions \
   -d '{"model":"mtplx","messages":[{"role":"user","content":"hi"}],"stream":true}'
 ```
 
-Sessions survive: a warm-prefix session bank keeps multi-turn chats fast, and a default-on SSD session cache restores sessions near-instantly across restarts (disable with `--ssd-session-cache off`).
+Sessions survive: a warm-prefix session bank keeps multi-turn chats fast, and a default-on SSD session cache restores sessions near-instantly across restarts (disable with `--ssd-session-cache off`). A restored turn decodes as if it had never been paused: on 2.11.3 a seeded warm turn and the same turn recomputed cold were measured to part only on a literal coin toss, and a 96,760-token conversation restored in 8 ms in the app.
 
 ### Embeddings and reranking
 
@@ -222,10 +265,13 @@ Metal memory cap.
 ## History
 
 MTPLX was the first runtime on Apple Silicon to run a model's own MTP heads
-with mathematically exact speculative sampling — 27 April 2026, before
+with mathematically exact speculative sampling: 27 April 2026, before
 llama.cpp had MTP at all, and months before it reached the hybrid GDN family.
-The dated record, with a public receipt for every claim, is in
-[HISTORY.md](HISTORY.md) and at [mtplx.com/history](https://mtplx.com/history/).
+The 27B record followed on 2 July 2026 (81.74 tok/s on Qwen 3.6 27B, raw logs
+published), the first Apple Silicon backend for Qwen 3.8 Flash Next on
+29 August 2026, and 125.8 tok/s on a Flash Next OpenCode request on
+16 September 2026. The dated record, with a public source for every claim, is
+in [HISTORY.md](HISTORY.md) and at [mtplx.com/history](https://mtplx.com/history/).
 
 ## License and credit
 
