@@ -4,7 +4,7 @@ All notable user-facing changes to MTPLX. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.11.3] - 2026-09-17
 
 ### Added
 
@@ -101,8 +101,8 @@ All notable user-facing changes to MTPLX. The format is based on
   on every request and the native template rendered that order verbatim,
   so an 18,776-token web-search conversation prefilled from the start on
   every turn (14.7 s and 15.2 s to the first token, 0 cached tokens). Tool
-  schemas are canonicalized once at the server boundary with every field,
-  value and list order preserved; a `tool_choice: none` turn keeps the
+  schemas are put into one fixed key order once, at the server boundary, with
+  every field, value and list order preserved; a `tool_choice: none` turn keeps the
   declarations in the prompt and on the same cache identity while calls
   stay disabled; and the server's request-only closing instruction is no
   longer banked as client history (that alone replayed a 2,820-token
