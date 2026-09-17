@@ -135,7 +135,7 @@ All notable user-facing changes to MTPLX. The format is based on
   plugins are preserved.
 - A conversation whose generation-final snapshot was refused for size (over the per-session cap, issue #499's 48 GB shape) reports that refusal as the next turn's `cache_miss_reason` (`oversized_snapshot_skipped`) and in the bank's `last_oversized_skip`; it used to surface as the cold tier's `ssd_prefix_miss`.
 
-- **A busy daemon is no longer reaped as dead** (issue #487, HenriGrimm).
+- **A busy daemon is no longer killed as dead** (issue #487, HenriGrimm).
   The app's watchdog killed a live daemon whose generation-final prefix
   commit took 19-25 s on a 110-150k vision agent session: two missed health
   probes were read as death while the commit succeeded. The watchdog now
@@ -165,7 +165,7 @@ All notable user-facing changes to MTPLX. The format is based on
   the configured port (an agent connector on 8001) was stranded for good,
   with the engine showing Running. The preflight now asks the OS who holds
   the port: a listener carrying the app's own launch marker in its
-  environment is reaped in place and the configured port is kept. For a
+  environment is stopped in place and the configured port is kept. For a
   genuinely foreign occupant the launch still moves to a free port, but
   only for that launch: settings keep the configured port, a save made
   meanwhile writes the configured port back (changing the port on purpose
@@ -181,7 +181,7 @@ All notable user-facing changes to MTPLX. The format is based on
   budget leaves after the weights and the runtime transients (a restore
   holds the snapshot next to its banked copy): 13.2 GiB on a 64 GB Mac with
   the 27B, 32 GiB on a 128 GB Mac with the 27B, 10.5 GiB with Flash-Next.
-  The PR's flat 32 GiB would have been swap death on a 64 GB seat; the
+  The PR's flat 32 GiB would have pushed a 64 GB Mac into swap; the
   flat fallbacks for a machine without a plan are unchanged. From the same
   PR: 64 GB Macs with 150 GiB of free disk default the SSD cap to 100 GiB
   instead of 32, and the hourly SSD write budget default is 128 GiB (was
@@ -230,7 +230,7 @@ All notable user-facing changes to MTPLX. The format is based on
   the whole turn. The committed-id splice now puts the model's own
   whitespace back, and it also runs when thinking is off.
 - **Copied blocks at the verify cache's growth edge kept their rows.** The
-  context-copy lane verified a copied block through the fixed-capacity
+  context-copy path verified a copied block through the fixed-capacity
   buffers of the compiled verify; a block that straddled the buffer's end (a
   512-token growth grant on the 27B, the rounding slack of a freshly
   restored Flash-Next entry) was written with a functional slice update that
@@ -274,7 +274,7 @@ All notable user-facing changes to MTPLX. The format is based on
 - **Flash-Next block verification is exact at every depth.** Three
   independent audits enumerated the block-verify accept law on tiny
   vocabularies and found it exact at depths 1 and 2 but off by up to 4e-2
-  total variation at depth 3, on windows where the last depth's coin had
+  total variation at depth 3, in the cases where the last depth's acceptance probability had
   been clipped to 1. The ladder now caps the reach budget by the realised
   reach, propagates that feasible budget, and corrects a rejection from the
   deficit the coins leave; an enumeration test compares the emitted joint
@@ -288,11 +288,11 @@ All notable user-facing changes to MTPLX. The format is based on
   partial restore of a recurrent entry now lands on a stored recurrent
   boundary at or below the match point.
 - **The banked state after an MTP turn covers every committed token.** The
-  primary that ended a response (a deferred greedy correction, a fresh
+  final token that ended a response (a deferred greedy correction, a fresh
   sample, or any max_tokens exit) was committed but never forwarded, so the
   banked state was one token short of the key it was filed under and the
   next warm turn decoded as if the terminator never existed (temperature-0
-  clients such as Cline hit it every turn). The ending primary is now
+  clients such as Cline hit it every turn). The final token is now
   forwarded before the state is banked.
 - **Non-finite logits fail loudly** instead of becoming token 0, which is
   `!` in the Qwen vocabulary (the thousands of exclamation marks of issue
@@ -303,7 +303,7 @@ All notable user-facing changes to MTPLX. The format is based on
   guard.
 - **The Flash-Next AR sampler follows the reference nucleus law.** The
   pipelined AR sampler measured top-p on the top-k slice alone, keeping one
-  to five fewer of the top-20 tokens than every other lane at 1.0/0.95/20;
+  to five fewer of the top-20 tokens than the other sampling paths at 1.0/0.95/20;
   it now measures the nucleus on the full-vocabulary softmax like the CPU
   reference (test: identical supports, total variation below 1e-5).
 - **Hindi, Thai and vowelled Arabic tokenize as the model was trained.**
@@ -321,7 +321,7 @@ All notable user-facing changes to MTPLX. The format is based on
   zeroed head is refused, and the install falls back to the resident target
   head as the drafter.
 - **A long agent turn stays warm across the model's own token seams.** A
-  model's sampled tokens are not always the canonical encoding of their own
+  model's sampled tokens are not always the standard encoding of their own
   text: in a Hermes session at effort xhigh the 27B wrote `"Nothing` as one
   token 8,498 tokens into a write_file call where the tokenizer encodes `"`
   then `Nothing`. The client's re-tokenized history then diverged from the
@@ -342,7 +342,7 @@ All notable user-facing changes to MTPLX. The format is based on
 - **The Flash-Next serving optimizations reach a served daemon.** Four
   hot-path gates (`MTPLX_QWEN4_OPDIET`, `MTPLX_QWEN4_VERIFY_GLUE`,
   `MTPLX_QWEN4_DRAFT_K20_PRESCATTER`, `MTPLX_QWEN4_BLOCK_VERIFY`) were read
-  once at import, before the server stamped the Flash-Next lane defaults,
+  once at import, before the server applied the Flash-Next defaults,
   so `/health` reported them configured while the daemon ran with all four
   off (davidtai's PR #475 found the same frozen readers). The gates are
   re-read when the model's runtime env is applied, before the load. Three of
