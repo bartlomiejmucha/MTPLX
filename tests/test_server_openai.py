@@ -14315,3 +14315,20 @@ def test_fast_path_env_status_treats_runtime_overrides_as_the_expectation(monkey
     # keys the server did not override keep the profile expectation
     assert "source" not in resolved["MTPLX_LAZY_VERIFY_LOGITS"]
     assert resolved["MTPLX_LAZY_VERIFY_LOGITS"]["expected"] == openai.FAST_PATH_ENV["MTPLX_LAZY_VERIFY_LOGITS"]
+
+
+def test_active_tool_output_read_hints_skips_overlong_lines() -> None:
+    # A base64 image or minified JSON blob on one line makes the path regexes
+    # backtrack quadratically. Such lines are skipped instead of scanned.
+    blob = "src/" + "A" * 200_000 + ".ts:1"
+    lines = [
+        "src/game/Arrow.ts:12:5 - error TS2339: Property 'hit' does not exist",
+        blob,
+    ]
+
+    started = time.perf_counter()
+    hints = openai._active_tool_output_read_hints(lines)
+    elapsed = time.perf_counter() - started
+
+    assert [hint.path for hint in hints] == ["src/game/Arrow.ts"]
+    assert elapsed < 1.0

@@ -11359,6 +11359,10 @@ _SOURCE_PATH_EXT_PATTERN = (
     r"ts|tsx|js|jsx|mjs|cjs|py|swift|html|css|json|yaml|yml|toml|md|"
     r"sh|zsh|rs|go|java|kt|m|mm|h|hpp|cpp|c|cs|vue|svelte|sql"
 )
+# The path regexes below backtrack quadratically in line length. No real source
+# path is this long, so a longer line is a data blob (base64 image, minified
+# JSON) where the scan can only burn CPU while holding the GIL.
+_ACTIVE_TOOL_OUTPUT_MAX_SCAN_LINE_LEN = 4096
 _ACTIVE_TOOL_OUTPUT_PATH_LINE_RES = (
     re.compile(
         rf"(?P<path>(?:/|\.{{1,2}}/|[A-Za-z0-9_.-]+/)[^\n:()<>\"'`]+?"
@@ -11840,6 +11844,8 @@ def _active_tool_output_read_hints(lines: list[str]) -> list[_ActiveToolOutputHi
     plain_paths: dict[str, set[int]] = {}
 
     for output_line_no, line in enumerate(lines, start=1):
+        if len(line) > _ACTIVE_TOOL_OUTPUT_MAX_SCAN_LINE_LEN:
+            continue
         if _ACTIVE_TOOL_OUTPUT_LOW_VALUE_LINE_RE.search(line):
             continue
         for path_line_re in _ACTIVE_TOOL_OUTPUT_PATH_LINE_RES:
